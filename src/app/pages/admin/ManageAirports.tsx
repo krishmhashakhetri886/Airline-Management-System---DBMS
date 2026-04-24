@@ -13,6 +13,8 @@ export default function ManageAirports() {
   const [airports, setAirports] = useState<Airport[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingAirportCode, setEditingAirportCode] = useState('');
 
   const [formData, setFormData] = useState({
     airport_code: '',
@@ -21,6 +23,7 @@ export default function ManageAirports() {
     terminal: '',
   });
 
+  
   const fetchAirports = async () => {
     try {
       const res = await fetch('http://localhost:5000/airports');
@@ -42,6 +45,8 @@ export default function ManageAirports() {
   }, []);
 
   const handleOpenModal = () => {
+    setIsEditMode(false);
+    setEditingAirportCode('');
     setFormData({
       airport_code: '',
       name: '',
@@ -49,6 +54,37 @@ export default function ManageAirports() {
       terminal: '',
     });
     setShowModal(true);
+  };
+
+  const handleEdit = (airport: Airport) => {
+    setIsEditMode(true);
+    setEditingAirportCode(airport.airport_code);
+    setFormData({
+      airport_code: airport.airport_code,
+      name: airport.name,
+      city: airport.city,
+      terminal: airport.terminal,
+    });
+    setShowModal(true);
+  };
+
+  const handleDelete = async (airportCode: string) => {
+    try {
+      const res = await fetch(`http://localhost:5000/delete-airport/${airportCode}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete airport');
+      }
+
+      fetchAirports();
+    } catch (error: any) {
+      console.error('Error deleting airport:', error);
+      alert(error.message || 'Error deleting airport');
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -70,8 +106,12 @@ export default function ManageAirports() {
     }
 
     try {
-      const res = await fetch('http://localhost:5000/add-airport', {
-        method: 'POST',
+      const url = isEditMode
+        ? `http://localhost:5000/update-airport/${editingAirportCode}`
+        : 'http://localhost:5000/add-airport';
+
+      const res = await fetch(url, {
+        method: isEditMode ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -86,14 +126,16 @@ export default function ManageAirports() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to add airport');
+        throw new Error(data.error || (isEditMode ? 'Failed to update airport' : 'Failed to add airport'));
       }
 
       setShowModal(false);
+      setIsEditMode(false);
+      setEditingAirportCode('');
       fetchAirports();
     } catch (error: any) {
-      console.error('Error adding airport:', error);
-      alert(error.message || 'Error adding airport');
+      console.error('Error saving airport:', error);
+      alert(error.message || 'Error saving airport');
     }
   };
 
@@ -166,13 +208,13 @@ export default function ManageAirports() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => alert('Edit airport logic not enabled in API flow yet')}
+                          onClick={() => handleEdit(airport)}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => alert('Delete airport logic not enabled in API flow yet')}
+                          onClick={() => handleDelete(airport.airport_code)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />

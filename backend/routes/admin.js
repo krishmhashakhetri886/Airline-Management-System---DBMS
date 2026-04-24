@@ -131,6 +131,16 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 
 const router = Router();
 
+function generateCode(name) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+
+  return String(name || "").trim().substring(0, 2).toUpperCase();
+}
+
 // ================== ADD FLIGHT ==================
 router.post(
   "/add-flight",
@@ -255,6 +265,18 @@ router.get(
   })
 );
 
+router.put("/update-airport/:airport_code", asyncHandler(async (req, res) => {
+  const { airport_code } = req.params;
+  const { name, city, terminal } = req.body;
+
+  await pool.execute(
+    "UPDATE airport SET name = ?, city = ?, terminal = ? WHERE airport_code = ?",
+    [name, city, terminal, airport_code]
+  );
+
+  res.json({ message: "Airport updated successfully" });
+}));
+
 router.put(
   "/update-flight/:id",
   asyncHandler(async (req, res) => {
@@ -328,6 +350,38 @@ router.put(
   })
 );
 
+router.delete("/delete-airport/:airport_code", asyncHandler(async (req, res) => {
+  const { airport_code } = req.params;
+
+  await pool.execute(
+    "DELETE FROM airport WHERE airport_code = ?",
+    [airport_code]
+  );
+
+  res.json({ message: "Airport deleted successfully" });
+}));
+
+router.delete(
+  "/delete-flight/:id",
+  asyncHandler(async (req, res) => {
+    const flightId = Number(req.params.id);
+
+    if (!Number.isInteger(flightId) || flightId <= 0) {
+      return res.status(400).json({ error: "Invalid flight id" });
+    }
+
+    const [result] = await pool.execute(
+      "DELETE FROM flight WHERE flight_id = ?",
+      [flightId]
+    );
+
+    return res.json({
+      message: "Flight deleted successfully",
+      affectedRows: result.affectedRows,
+    });
+  })
+);
+
 // ================== ALL BOOKINGS ==================
 router.get(
   "/all-bookings",
@@ -355,6 +409,25 @@ ORDER BY b.booking_id DESC;`
     }));
 
     return res.json(result);
+  })
+);
+
+router.get(
+  "/booking-stats",
+  asyncHandler(async (_req, res) => {
+    const [rows] = await pool.execute(
+      `SELECT 
+        al.name AS airline_name,
+        COUNT(b.booking_id) AS total_bookings,
+        COUNT(DISTINCT b.passenger_id) AS total_passengers
+      FROM booking b
+      JOIN flight f ON b.flight_id = f.flight_id
+      JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
+      JOIN airline al ON ac.airline_id = al.airline_id
+      GROUP BY al.name`
+    );
+
+    return res.json(rows);
   })
 );
 
@@ -445,8 +518,7 @@ router.post(
       return res.status(409).json({ error: "Airline already exists" });
     }
 
-    const safeName = trimmedName.replace(/[^a-zA-Z0-9]/g, "");
-    const generatedCode = safeName.slice(0, 2).toUpperCase();
+    const generatedCode = generateCode(trimmedName);
 
     if (!generatedCode) {
       return res.status(400).json({ error: "Unable to generate airline code" });
@@ -457,9 +529,26 @@ router.post(
     try {
       await connection.beginTransaction();
 
+      let finalCode = generatedCode;
+      let suffix = 0;
+
+      while (true) {
+        const [codeRows] = await connection.execute(
+          "SELECT code FROM Airline WHERE code = ? LIMIT 1",
+          [finalCode]
+        );
+
+        if (codeRows.length === 0) {
+          break;
+        }
+
+        suffix += 1;
+        finalCode = `${generatedCode}${suffix}`;
+      }
+
       const [result] = await connection.execute(
         "INSERT INTO Airline (name, code) VALUES (?, ?)",
-        [trimmedName, generatedCode]
+        [trimmedName, finalCode]
       );
 
       const airlineId = result.insertId;

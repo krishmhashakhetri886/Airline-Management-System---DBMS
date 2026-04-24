@@ -87,8 +87,6 @@ export default function BookFlight() {
   const handleSeatClick = (seatId: string, isBooked: boolean) => {
     if (isBooked) return;
 
-    const seatClass = seatId.startsWith('B') ? 'Business' : 'Economy';
-
     if (selectedSeats.includes(seatId)) {
       const updatedSeats = selectedSeats.filter(s => s !== seatId);
       setSelectedSeats(updatedSeats);
@@ -96,14 +94,6 @@ export default function BookFlight() {
     }
 
     if (selectedSeats.length >= numTickets) return;
-
-    if (selectedSeats.length > 0) {
-      const currentClass = selectedSeats[0].startsWith('B') ? 'Business' : 'Economy';
-      if (currentClass !== seatClass) {
-        alert('Please select seats from the same class');
-        return;
-      }
-    }
 
     setSelectedSeats([...selectedSeats, seatId]);
   };

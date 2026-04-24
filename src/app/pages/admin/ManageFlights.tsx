@@ -273,6 +273,29 @@ export default function ManageFlights() {
     }
   };
 
+  const handleDelete = async (flightId: number) => {
+    if (!confirm('Are you sure you want to delete this flight?')) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`http://localhost:5000/delete-flight/${flightId}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete flight');
+      }
+
+      fetchFlights();
+    } catch (error: any) {
+      console.error('Error deleting flight:', error);
+      alert(error.message || 'Error deleting flight');
+    }
+  };
+
   const handleSourceCityChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const city = e.target.value;
     setSourceCity(city);
@@ -747,7 +770,7 @@ export default function ManageFlights() {
                     <td className="p-3">{flight?.economy_seats || 0} Economy / {flight?.business_seats || 0} Business</td>
                     <td className="p-3 flex gap-2">
                       <button onClick={() => handleEdit(flight)} className="text-blue-600"><Edit2 size={16} /></button>
-                      <button className="text-red-600"><Trash2 size={16} /></button>
+                      <button onClick={() => handleDelete(flight.flight_id)} className="text-red-600"><Trash2 size={16} /></button>
                     </td>
                   </tr>
                 ))}

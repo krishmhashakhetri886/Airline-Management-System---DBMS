@@ -14,8 +14,15 @@ type BookingRow = {
   status: string | null;
 };
 
+type BookingStatRow = {
+  airline_name: string;
+  total_bookings: number;
+  total_passengers: number;
+};
+
 export default function AllBookings() {
   const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [bookingStats, setBookingStats] = useState<BookingStatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -42,6 +49,22 @@ export default function AllBookings() {
       })
       .finally(() => {
         setLoading(false);
+      });
+
+    fetch('http://localhost:5000/booking-stats')
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to fetch booking stats');
+        }
+        return data;
+      })
+      .then((data) => {
+        setBookingStats(Array.isArray(data) ? data : []);
+      })
+      .catch((err: any) => {
+        console.error('Error fetching booking stats:', err);
+        setBookingStats([]);
       });
   }, []);
 
@@ -152,6 +175,35 @@ export default function AllBookings() {
             {error}
           </div>
         )}
+
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Airline Name</th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Total Bookings</th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Total Passengers</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {bookingStats.length === 0 ? (
+                  <tr>
+                    <td className="px-6 py-4 text-sm text-gray-500" colSpan={3}>No booking analytics available</td>
+                  </tr>
+                ) : (
+                  bookingStats.map((stat) => (
+                    <tr key={stat.airline_name} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 text-sm text-gray-900">{stat.airline_name}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">{stat.total_bookings}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">{stat.total_passengers}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         {loading ? (
           <div className="bg-white rounded-2xl p-12 shadow-sm border border-gray-200 text-center">
