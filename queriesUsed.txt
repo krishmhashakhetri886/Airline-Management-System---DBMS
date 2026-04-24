@@ -1,0 +1,630 @@
+QUERIES USED IN THIS PROJECT (DBMS DEEP REFERENCE)
+
+Scope
+- This document lists SQL queries currently used in backend runtime code.
+- Backend scanned:
+  - backend/routes/auth.js
+  - backend/routes/flights.js
+  - backend/routes/booking.js
+  - backend/routes/payment.js
+  - backend/routes/admin.js
+  - backend/db.js
+- Note: Several old queries are present as commented code in files; those are NOT executed at runtime.
+
+====================================================
+1) DB CONNECTION / INFRASTRUCTURE
+====================================================
+File: backend/db.js
+
+Query-like operation
+- connection.ping()
+
+Why used
+- Validates DB connectivity during server startup.
+
+How used
+- testConnection() acquires a pooled connection and runs ping.
+- If ping succeeds, server continues; if not, startup fails.
+
+DBMS concepts
+- Connection pooling (mysql2/promise createPool)
+- Health-check operation for readiness
+
+====================================================
+2) AUTH MODULE QUERIES
+====================================================
+File: backend/routes/auth.js
+
+Route: POST /signup
+
+Q1
+SELECT passenger_id FROM Passenger WHERE email_id = ? LIMIT 1
+
+Why used
+- Email uniqueness check before insert.
+
+How used
+- Executed inside transaction.
+- If row exists, rollback + 409 conflict.
+
+DBMS concepts
+- Predicate filter by unique candidate key (email_id)
+- LIMIT 1 for early stop/efficiency
+
+Q2
+SELECT COALESCE(MAX(passenger_id), 0) + 1 AS next_passenger_id FROM Passenger
+
+Why used
+- Manual passenger_id generation.
+
+How used
+- Reads current max id, increments by 1, uses result in insert.
+
+DBMS risks/notes
+- Potential race condition in high concurrency if not protected by stronger locking/sequence.
+- Here it runs in transaction, but MAX+1 can still conflict under concurrent transactions.
+
+Q3
+INSERT INTO Passenger (
+  passenger_id, first_name, middle_name, last_name,
+  email_id, phone_no, dob, passport_no, password
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+Why used
+- Creates new passenger account.
+
+How used
+- Executed after validation + duplicate check.
+- Commit on success; rollback on error.
+
+Route: POST /login
+
+Q4
+SELECT * FROM User WHERE email = ? AND password = ?
+
+Why used
+- Admin authentication lookup.
+
+How used
+- Checked first; if found returns admin session payload.
+
+Q5
+SELECT * FROM Passenger WHERE email_id = ? AND password = ?
+
+Why used
+- Passenger authentication fallback if admin lookup fails.
+
+How used
+- Returns passenger user payload with role="passenger".
+
+Security note
+- Password appears compared as plain value in SQL.
+- DBMS works, but production best practice is hashed password storage and compare in app layer.
+
+====================================================
+3) FLIGHTS MODULE QUERIES
+====================================================
+File: backend/routes/flights.js
+
+Helper: fetchAllFlights()
+
+Q6
+SELECT
+  f.*,
+  a.economy_seats,
+  a.business_seats,
+  a.economy_price,
+  a.business_price
+FROM flight f
+JOIN aircraft a ON f.aircraft_id = a.aircraft_id
+
+Why used
+- Passenger/admin-facing flight list enriched with seat-class counts and prices.
+
+How used
+- Called by GET /flights and returned as raw rows.
+
+DBMS concepts
+- Inner join: flight row only appears if related aircraft exists.
+- Denormalized response assembled at query time.
+
+Route: GET /booked-seats/:flight_id
+
+Q7
+SELECT seat_no FROM Booking_Seat WHERE flight_id = ?
+
+Why used
+- Returns booked seat list to disable seats in frontend.
+
+How used
+- Returns rows as array of objects [{ seat_no }].
+
+Route: GET /seats/:flight_id
+
+Q8
+SELECT seat_no FROM Booking_Seat WHERE flight_id = ?
+
+Why used
+- Legacy/alternate booked seats endpoint.
+
+How used
+- Same data as Q7, but transformed into
+  { flight_id, booked_seats: ["B1", "E4", ...] }
+
+====================================================
+4) BOOKING MODULE QUERIES
+====================================================
+File: backend/routes/booking.js
+
+Route: POST /booking
+
+Q9
+SELECT passenger_id FROM Passenger WHERE passenger_id = ?
+
+Why used
+- Validates passenger existence before booking flow.
+
+How used
+- Early guard; rejects invalid passenger references.
+
+Q10
+SHOW COLUMNS FROM Booking LIKE 'class'
+
+Why used
+- Dynamic schema capability check.
+
+How used
+- If class column exists, insert includes class value.
+- If not, insert uses schema-compatible query.
+
+DBMS concepts
+- Metadata introspection at runtime.
+- Makes app tolerant to schema drift/migration state.
+
+Q11
+SELECT available_seats FROM Flight WHERE flight_id = ? FOR UPDATE
+
+Why used
+- Lock flight row to safely decrement available seats.
+
+How used
+- Executed inside transaction before seat assignment.
+
+DBMS concepts
+- Row-level lock (FOR UPDATE)
+- Prevents lost updates under concurrent bookings.
+
+Q12
+SELECT seat_no FROM Booking_Seat
+WHERE flight_id = ? AND seat_no IN (?, ?, ...)
+
+Why used
+- Detects conflicts for requested seats.
+
+How used
+- Dynamic placeholders based on seat count.
+- If any row returned, booking rejected with 409.
+
+Q13 (variant A, if class column exists)
+INSERT INTO Booking (passenger_id, flight_id, amount, status, class)
+VALUES (?, ?, ?, ?, ?)
+
+Q14 (variant B, if class column missing)
+INSERT INTO Booking (passenger_id, flight_id, amount, status)
+VALUES (?, ?, ?, ?)
+
+Why used
+- Creates booking master record.
+
+How used
+- Query chosen dynamically via Q10 result.
+
+Q15
+INSERT INTO Booking_Seat (booking_id, seat_no, flight_id)
+VALUES (?, ?, ?), (?, ?, ?), ...
+
+Why used
+- Bulk inserts selected seats mapped to booking.
+
+How used
+- Single statement for all seats to reduce round trips.
+
+Q16
+UPDATE Flight SET available_seats = available_seats - ? WHERE flight_id = ?
+
+Why used
+- Persists reduced inventory after seat allocation.
+
+How used
+- Final transactional step before commit.
+
+Transaction semantics (POST /booking)
+- beginTransaction -> validation/lock/conflict checks -> insert booking -> insert seats -> update flight -> commit
+- rollback on any failure
+
+Route: GET /my-bookings/:passenger_id
+
+Q17
+SELECT
+  b.booking_id,
+  b.amount,
+  b.status,
+  f.source,
+  f.destination,
+  f.source_terminal,
+  f.destination_terminal,
+  f.departure_time,
+  f.arrival_time,
+  sa.name AS source_airport_name,
+  sa.city AS source_city,
+  da.name AS destination_airport_name,
+  da.city AS destination_city,
+  al.name AS airline_name
+FROM booking b
+JOIN flight f ON b.flight_id = f.flight_id
+JOIN airport sa ON f.source = sa.airport_code
+JOIN airport da ON f.destination = da.airport_code
+JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
+JOIN airline al ON ac.airline_id = al.airline_id
+WHERE b.passenger_id = ?
+
+Why used
+- Builds rich My Bookings payload with terminals, city, airport names, airline.
+
+How used
+- Single join query instead of multiple API calls.
+
+DBMS concepts
+- Multi-table equi-joins
+- Projection aliases for frontend-friendly field names
+
+Route: POST /cancel-booking/:booking_id
+
+Q18
+UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?
+
+Why used
+- Soft-cancel booking state.
+
+How used
+- No delete; history remains intact.
+
+Route: GET /passenger-dashboard/:passenger_id
+
+Q19
+SELECT COUNT(*) AS count FROM Booking WHERE passenger_id = ?
+
+Why used
+- Dashboard total bookings KPI.
+
+Q20
+SELECT SUM(amount) AS total
+FROM Booking
+WHERE passenger_id = ? AND status = 'CONFIRMED'
+
+Why used
+- Dashboard total spend KPI.
+
+Q21
+SELECT
+  f.source,
+  f.destination,
+  f.departure_time,
+  f.flight_date
+FROM Booking b
+JOIN Flight f ON b.flight_id = f.flight_id
+WHERE b.passenger_id = ?
+  AND b.status = 'CONFIRMED'
+  AND f.flight_date >= CURDATE()
+ORDER BY f.flight_date ASC
+
+Why used
+- Dashboard upcoming flights list.
+
+DBMS concepts
+- Date filtering with CURDATE()
+- Ordered result set for timeline display
+
+====================================================
+5) PAYMENT MODULE QUERIES
+====================================================
+File: backend/routes/payment.js
+
+Route: POST /payment
+
+Q22
+SELECT booking_id FROM Booking WHERE booking_id = ? FOR UPDATE
+
+Why used
+- Locks booking row before payment/booking-status update.
+
+How used
+- Prevents inconsistent payment/status updates from concurrent requests.
+
+Q23
+INSERT INTO Payment (method, status, booking_id) VALUES (?, ?, ?)
+
+Why used
+- Persists payment transaction record.
+
+Q24
+UPDATE Booking SET status = ? WHERE booking_id = ?
+
+Why used
+- Maps payment result to booking business status (CONFIRMED / PAYMENT_FAILED).
+
+How used
+- deriveBookingStatus() computes final status string.
+
+Route: GET /payments/:passenger_id
+
+Q25
+SELECT
+  p.payment_id,
+  p.method,
+  p.status,
+  p.booking_id,
+  b.amount
+FROM Payment p
+JOIN Booking b ON p.booking_id = b.booking_id
+WHERE b.passenger_id = ?
+ORDER BY p.payment_id DESC
+
+Why used
+- Lists passenger payment history with amount.
+
+====================================================
+6) ADMIN MODULE QUERIES
+====================================================
+File: backend/routes/admin.js
+
+Important note
+- This file currently contains duplicate runtime route definitions for:
+  - GET /admin-flights
+  - PUT /update-flight/:id
+- In Express, the first matching route that sends response can prevent later duplicate handlers from running.
+- This is not a SQL syntax problem, but it affects runtime behavior predictability.
+
+Route: POST /add-flight
+
+Q26
+SELECT MAX(flight_id) AS maxId FROM Flight
+
+Why used
+- Manual flight_id generation.
+
+Q27
+INSERT INTO Flight (
+  flight_id, source, destination, departure_time, arrival_time,
+  source_terminal, destination_terminal, flight_date,
+  available_seats, price, aircraft_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+Why used
+- Adds a flight with explicit generated id and derived flight_date.
+
+Route: GET /admin-flights (first active definition)
+
+Q28
+SELECT
+  f.*,
+  sa.name AS source_airport_name,
+  sa.city AS source_city,
+  da.name AS destination_airport_name,
+  da.city AS destination_city,
+  ac.model,
+  ac.economy_seats,
+  ac.business_seats,
+  ac.airline_id,
+  al.name AS airline_name
+FROM flight f
+LEFT JOIN airport sa ON f.source = sa.airport_code
+LEFT JOIN airport da ON f.destination = da.airport_code
+LEFT JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
+LEFT JOIN airline al ON ac.airline_id = al.airline_id
+ORDER BY f.flight_id DESC
+
+Why used
+- Admin table view with complete display metadata.
+
+How used
+- LEFT JOIN prevents flight rows from disappearing when related rows are missing.
+
+Route: PUT /update-flight/:id (first active definition)
+
+Q29
+UPDATE flight
+SET source = ?, destination = ?, departure_time = ?, arrival_time = ?,
+    price = ?, aircraft_id = ?, source_terminal = ?, destination_terminal = ?
+WHERE flight_id = ?
+
+Why used
+- Edit flight details from admin modal.
+
+Route: GET /admin-flights (duplicate second definition)
+
+Q30
+Same select as Q28 but with INNER JOIN instead of LEFT JOIN.
+
+Why notable
+- Can return fewer rows if relations are missing.
+- Duplicate route adds ambiguity; depending on handler order/flow, one definition may shadow the other.
+
+Route: PUT /update-flight/:id (duplicate second definition)
+
+Q31
+Same update intent as Q29 with equivalent field set.
+
+Route: GET /all-bookings
+
+Q32
+SELECT
+  b.booking_id,
+  b.status,
+  p.first_name,
+  p.last_name,
+  f.source,
+  f.destination,
+  f.departure_time,
+  f.arrival_time,
+  b.amount AS price
+FROM booking b
+JOIN passenger p ON b.passenger_id = p.passenger_id
+JOIN flight f ON b.flight_id = f.flight_id
+ORDER BY b.booking_id DESC
+
+Why used
+- Admin bookings list with passenger + route + amount + booking status.
+
+Route: GET /all-payments
+
+Q33
+SELECT
+  p.payment_id,
+  p.method,
+  p.status,
+  b.booking_id,
+  CONCAT(ps.first_name, ' ', ps.last_name) AS passenger_name,
+  b.amount
+FROM Payment p
+JOIN Booking b ON p.booking_id = b.booking_id
+JOIN Passenger ps ON b.passenger_id = ps.passenger_id
+ORDER BY p.payment_id DESC
+
+Why used
+- Admin payment ledger view.
+
+Route: GET /admin-stats
+
+Q34
+SELECT COUNT(*) AS count FROM Booking
+Q35
+SELECT SUM(amount) AS total FROM Booking WHERE status = 'CONFIRMED'
+Q36
+SELECT COUNT(*) AS count FROM Passenger
+Q37
+SELECT COUNT(*) AS count FROM Flight
+
+Why used
+- Dashboard aggregates: bookings, revenue, passengers, flights.
+
+Route: POST /add-airline
+
+Q38
+SELECT airline_id FROM Airline WHERE LOWER(name) = LOWER(?) LIMIT 1
+
+Why used
+- Prevent duplicate airline names (case-insensitive).
+
+Q39
+INSERT INTO Airline (name, code) VALUES (?, ?)
+
+Why used
+- Creates airline master row.
+
+Q40
+INSERT INTO Aircraft (model, airline_id, total_seats) VALUES (?, ?, ?)
+
+Why used
+- Creates one or more aircraft rows for new airline.
+
+How used
+- Runs in transaction; one insert per aircraft item.
+
+Route: GET /airlines
+
+Q41
+SELECT * FROM Airline
+
+Why used
+- Populates airline dropdown/lists.
+
+Route: GET /airports
+
+Q42
+SELECT airport_code, name, city, terminal FROM Airport
+
+Why used
+- Populates airport/city/terminal dependent dropdowns.
+
+Route: GET /aircrafts/:airline_id
+
+Q43
+SELECT * FROM Aircraft WHERE airline_id = ?
+
+Why used
+- Dependent aircraft dropdown after airline selection.
+
+Route: GET /admin-analytics
+
+Q44
+SELECT status, COUNT(*) as count
+FROM Booking
+GROUP BY status
+
+Why used
+- Booking status distribution chart data.
+
+Q45
+SELECT al.name, COUNT(*) as bookings
+FROM Booking b
+JOIN Flight f ON b.flight_id = f.flight_id
+JOIN Aircraft ac ON f.aircraft_id = ac.aircraft_id
+JOIN Airline al ON ac.airline_id = al.airline_id
+GROUP BY al.name
+
+Why used
+- Bookings grouped by airline for analytics chart.
+
+====================================================
+7) DBMS PATTERNS USED ACROSS PROJECT
+====================================================
+1. Prepared statements with placeholders (?)
+- Used in nearly all dynamic queries to prevent SQL injection and safely bind values.
+
+2. Transactions
+- Used in critical write paths:
+  - signup
+  - booking creation
+  - payment processing
+  - add-airline (+ aircraft rows)
+- Pattern: beginTransaction -> execute multiple queries -> commit/rollback.
+
+3. Row-level locking
+- FOR UPDATE in booking/payment flows to enforce consistency under concurrency.
+
+4. Join strategy
+- INNER JOIN: requires matching related rows.
+- LEFT JOIN: retains primary rows even with missing related records.
+- This distinction directly affects empty-list bugs.
+
+5. Aggregate queries
+- COUNT, SUM, GROUP BY used for dashboards and analytics.
+
+6. Runtime schema introspection
+- SHOW COLUMNS to handle optional Booking.class column.
+
+7. Manual key generation
+- SELECT MAX(id)+1 used in Passenger/Flight paths.
+- Works but is weaker than DB-native AUTO_INCREMENT/sequence under high concurrency.
+
+====================================================
+8) QUICK RISK/QUALITY NOTES (DBMS-SPECIFIC)
+====================================================
+- Duplicate route definitions in admin.js can cause unpredictable behavior and difficult debugging.
+- Manual ID generation (MAX+1) can race under concurrency.
+- Plaintext password checks in auth queries are functional but not secure for production.
+- Some modules use uppercase table names and some lowercase; behavior depends on DB server/table name case settings.
+
+====================================================
+9) SUMMARY
+====================================================
+- Total active SQL statements identified: 45 distinct query patterns/usages.
+- Core business flows covered:
+  - Auth (signup/login)
+  - Flight inventory retrieval
+  - Seat locking and booking
+  - Payment finalization
+  - Passenger booking history/dashboard
+  - Admin CRUD + analytics
+- The system is heavily join-driven and transaction-aware in booking/payment paths, which is good for data integrity.

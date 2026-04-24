@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+backend/node_modules
+[.env](http://_vscodecontentref_/1)
+*.log
+.vscode
+.DS_Store
