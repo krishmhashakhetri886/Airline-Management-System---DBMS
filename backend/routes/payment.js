@@ -169,9 +169,12 @@ router.get(
         p.method,
         p.status,
         p.booking_id,
-        b.amount
+        b.amount,
+        b.status AS booking_status,
+        f.status AS flight_status
       FROM Payment p
       JOIN Booking b ON p.booking_id = b.booking_id
+      LEFT JOIN Flight f ON b.flight_id = f.flight_id
       WHERE b.passenger_id = ?
       ORDER BY p.payment_id DESC
       `,

@@ -17,8 +17,18 @@ export default function MyPayments() {
     fetch(`http://localhost:5000/payments/${user.id}`)
       .then(res => res.json())
       .then(data => {
+        console.log("PAYMENTS DATA:", data);
         const mapped = data.map((p: any) => {
-          const status = p.status?.toUpperCase(); // ✅ normalize
+          const status = p.status?.toUpperCase();
+
+          // Map booking_status and flight_status to displayStatus
+          let displayStatus = 'Completed'; // default
+
+          if (p.booking_status === 'CANCELLED') {
+            displayStatus = 'Refunded';
+          } else if (p.flight_status === 'INACTIVE') {
+            displayStatus = 'Refunded';
+          }
 
           return {
             id: p.payment_id,
@@ -26,13 +36,14 @@ export default function MyPayments() {
             amount: Number(p.amount),
             method: p.method || 'card',
 
-            // ✅ FIXED STATUS MAPPING
             status:
               status === 'SUCCESS'
                 ? 'completed'
                 : status === 'PENDING'
                 ? 'pending'
                 : 'failed',
+
+            displayStatus,
 
             paymentDate: new Date()
           };
@@ -49,9 +60,13 @@ export default function MyPayments() {
 
   const userPayments = payments;
 
-  const totalPaid = userPayments
-    .filter(p => p.status === 'completed')
+  const totalPaid = userPayments.reduce((sum, p) => sum + p.amount, 0);
+
+  const refundedAmount = userPayments
+    .filter(p => p.displayStatus === 'Refunded')
     .reduce((sum, p) => sum + p.amount, 0);
+
+  const effectiveSpent = totalPaid - refundedAmount;
 
   const getPaymentStatusIcon = (status: string) => {
     switch (status) {
@@ -87,7 +102,7 @@ export default function MyPayments() {
           <p className="text-gray-600">Track all your transactions and payments</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
             <div className="flex items-start justify-between">
               <div>
@@ -118,10 +133,22 @@ export default function MyPayments() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-gray-600 text-sm mb-1">Total Spent</p>
-                <p className="text-3xl font-bold text-gray-900">₹{totalPaid}</p>
+                <p className="text-3xl font-bold text-gray-900">₹{effectiveSpent}</p>
               </div>
               <div className="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center">
                 <CreditCard className="w-6 h-6 text-purple-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-gray-600 text-sm mb-1">Refunded</p>
+                <p className="text-3xl font-bold text-gray-900">₹{refundedAmount}</p>
+              </div>
+              <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center">
+                <CreditCard className="w-6 h-6 text-red-600" />
               </div>
             </div>
           </div>
@@ -162,8 +189,8 @@ export default function MyPayments() {
                       <td className="px-6 py-4">{payment.method}</td>
                       <td className="px-6 py-4">₹{payment.amount}</td>
                       <td className="px-6 py-4">
-                        <div className={`px-3 py-1 rounded ${getPaymentStatusColor(payment.status)}`}>
-                          {getPaymentStatusIcon(payment.status)} {payment.status}
+                        <div className="px-3 py-1 rounded bg-gray-100 text-gray-800">
+                          {payment.displayStatus}
                         </div>
                       </td>
                       <td className="px-6 py-4">

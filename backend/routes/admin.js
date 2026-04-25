@@ -373,9 +373,9 @@ router.delete(
     }
 
     const [result] = await pool.execute(
-      "UPDATE flight SET status = 'INACTIVE' WHERE flight_id = ?",
-      [flightId]
-    );
+  "UPDATE booking SET status = 'CANCELLED' WHERE flight_id = ?",
+  [flightId]
+);
 
     await pool.execute(
       "UPDATE booking SET status = 'CANCELLED' WHERE flight_id = ?",

@@ -352,7 +352,24 @@ router.get(
 
     console.log("Bookings API:", rows);
 
-    res.json(rows);
+// 🔽 ADD THIS BLOCK HERE
+const updatedRows = rows.map(b => {
+  if (
+    !b.flight_id ||
+    b.flight_status === 'INACTIVE' ||
+    b.source_airport_status === 'INACTIVE' ||
+    b.destination_airport_status === 'INACTIVE'
+  ) {
+    return {
+      ...b,
+      status: 'FLIGHT CANCELLED'
+    };
+  }
+  return b;
+});
+
+// 🔽 REPLACE res.json(rows)
+res.json(updatedRows);
   })
 );
 
@@ -393,9 +410,20 @@ router.get(
 
     // total spent (only CONFIRMED)
     const [[totalSpent]] = await pool.execute(
-      "SELECT SUM(amount) AS total_spent FROM booking WHERE passenger_id = ? AND status = 'CONFIRMED' AND flight_id IS NOT NULL",
-      [passengerId]
-    );
+  `
+  SELECT SUM(b.amount) AS total_spent
+  FROM booking b
+  JOIN flight f ON b.flight_id = f.flight_id
+  JOIN airport src ON f.source = src.airport_code
+  JOIN airport dest ON f.destination = dest.airport_code
+  WHERE b.passenger_id = ?
+    AND b.status = 'CONFIRMED'
+    AND f.status = 'ACTIVE'
+    AND src.status = 'ACTIVE'
+    AND dest.status = 'ACTIVE'
+  `,
+  [passengerId]
+);
 
     // upcoming flights
     const [upcomingFlights] = await pool.execute(
