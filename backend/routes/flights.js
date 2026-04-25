@@ -6,14 +6,30 @@ const router = Router();
 
 async function fetchAllFlights() {
   const [rows] = await pool.execute(`
-    SELECT 
+    SELECT
       f.*,
+      a.model,
       a.economy_seats,
-      a.business_seats
+      a.business_seats,
+      al.name AS airline_name,
+      src.name AS source_airport,
+      src.status AS source_airport_status,
+      src.city AS source_city,
+      dest.name AS destination_airport,
+      dest.status AS destination_airport_status,
+      dest.city AS destination_city
     FROM flight f
-    LEFT JOIN aircraft a 
+    JOIN aircraft a
       ON f.aircraft_id = a.aircraft_id
+    JOIN airline al
+      ON a.airline_id = al.airline_id
+    LEFT JOIN airport src
+      ON f.source = src.airport_code
+    LEFT JOIN airport dest
+      ON f.destination = dest.airport_code
     WHERE f.status = 'ACTIVE'
+      AND src.status = 'ACTIVE'
+      AND dest.status = 'ACTIVE'
   `);
 
   return { rows, tableName: "Flight" };

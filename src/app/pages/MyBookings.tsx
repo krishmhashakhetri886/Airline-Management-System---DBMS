@@ -190,7 +190,26 @@ export default function MyBookings() {
     fetch(`http://localhost:5000/my-bookings/${user.id}`)
       .then(res => res.json())
       .then(data => {
-        setBookings(data || []);
+        const normalized = (data || []).map((booking: any) => ({
+          ...booking,
+          flight: booking.flight ?? {
+            source: booking.source,
+            destination: booking.destination,
+            status: booking.flight_status,
+            source_city: booking.source_city,
+            source_airport_name: booking.source_airport_name,
+            source_airport_status: booking.source_airport_status,
+            destination_city: booking.destination_city,
+            destination_airport_name: booking.destination_airport_name,
+            destination_airport_status: booking.destination_airport_status,
+            source_terminal: booking.source_terminal,
+            destination_terminal: booking.destination_terminal,
+            departure_time: booking.departure_time,
+            arrival_time: booking.arrival_time,
+          },
+        }));
+
+        setBookings(normalized);
         setLoading(false);
       })
       .catch(err => {
@@ -201,13 +220,37 @@ export default function MyBookings() {
 
   const now = new Date();
 
-  const upcomingBookings = bookings.filter((b) =>
-    new Date(b.departure_time) > now
+  const isFlightDeleted = (booking: any) => booking.flight_id == null;
+  const isInactiveFlight = (booking: any) =>
+    booking.flight?.status === 'INACTIVE' || booking.flight_status === 'INACTIVE';
+  const isInactiveAirport = (booking: any) =>
+    booking.flight?.source_airport_status === 'INACTIVE' ||
+    booking.source_airport_status === 'INACTIVE' ||
+    booking.flight?.destination_airport_status === 'INACTIVE' ||
+    booking.destination_airport_status === 'INACTIVE';
+  const isAirlineMissing = (booking: any) => !booking.airline_name;
+  const isDeletedBooking = (booking: any) =>
+    isFlightDeleted(booking) || isInactiveFlight(booking) || isInactiveAirport(booking) || isAirlineMissing(booking);
+
+  const deletedBookings = bookings.filter((b) =>
+    isDeletedBooking(b)
   );
 
-  const pastBookings = bookings.filter((b) =>
-    new Date(b.departure_time) <= now
+  const cancelledBookings = bookings.filter((b) =>
+    b.status === 'CANCELLED' && !deletedBookings.some((d) => d.booking_id === b.booking_id)
   );
+
+  const upcomingBookings = bookings.filter((b) => {
+    if (deletedBookings.some((d) => d.booking_id === b.booking_id)) return false;
+    if (b.status === 'CANCELLED') return false;
+    return new Date(b.departure_time) > now;
+  });
+
+  const pastBookings = bookings.filter((b) => {
+    if (deletedBookings.some((d) => d.booking_id === b.booking_id)) return false;
+    if (b.status === 'CANCELLED') return false;
+    return new Date(b.departure_time) <= now;
+  });
 
   const formatDateTime = (value: string) => {
     const date = new Date(value);
@@ -215,10 +258,28 @@ export default function MyBookings() {
     return date.toLocaleString();
   };
 
+  const withDeletedAirportLabel = (name: string, status?: string) => {
+    if (!name) return name;
+    return status === 'INACTIVE' ? `${name} (Airport Deleted)` : name;
+  };
+
   const routeWithTerminal = (booking: any) => {
-    const sourceTerminal = booking.source_terminal || '-';
-    const destinationTerminal = booking.destination_terminal || '-';
-    return `${booking.source_city} (${booking.source_airport_name}) - ${sourceTerminal} → ${booking.destination_city} (${booking.destination_airport_name}) - ${destinationTerminal}`;
+    if (isFlightDeleted(booking)) {
+      return 'Flight Cancelled';
+    }
+
+    const sourceTerminal = booking.flight.source_terminal || booking.source_terminal || '-';
+    const destinationTerminal = booking.flight.destination_terminal || booking.destination_terminal || '-';
+    const sourceAirportName = withDeletedAirportLabel(
+      booking.flight.source_airport_name || booking.source_airport_name,
+      booking.flight.source_airport_status || booking.source_airport_status
+    );
+    const destinationAirportName = withDeletedAirportLabel(
+      booking.flight.destination_airport_name || booking.destination_airport_name,
+      booking.flight.destination_airport_status || booking.destination_airport_status
+    );
+    const route = `${booking.flight.source_city || booking.source_city} (${sourceAirportName}) - ${sourceTerminal} → ${booking.flight.destination_city || booking.destination_city} (${destinationAirportName}) - ${destinationTerminal}`;
+    return isDeletedBooking(booking) ? `${route} | Flight Cancelled` : route;
   };
 
   const renderBookingCard = (booking: any, isPast: boolean) => (
@@ -242,8 +303,13 @@ export default function MyBookings() {
               Booking ID: {booking.booking_id}
             </p>
             <p className="text-sm text-gray-500">
-              Airline: {booking.airline_name}
+              Airline: {booking.airline_name || '-'}
             </p>
+            {isDeletedBooking(booking) && (
+              <p className="text-sm text-gray-500">
+                Status: Flight Cancelled
+              </p>
+            )}
             <p className="text-sm text-gray-500">
               {routeWithTerminal(booking)}
             </p>
@@ -251,21 +317,25 @@ export default function MyBookings() {
         </div>
 
         <div className="bg-gradient-to-r from-[#1E3A8A] to-[#06B6D4] rounded-xl p-4 text-white">
-          <div className="flex justify-between">
-            <div>
-              <p className="text-xl font-bold">
-                {booking.source_city} ({booking.source_airport_name}) - {booking.source_terminal || '-'}
-              </p>
-              <p className="text-xs">{formatDateTime(booking.departure_time)}</p>
+          {isFlightDeleted(booking) ? (
+            <p className="text-xl font-bold">Flight Cancelled</p>
+          ) : (
+            <div className="flex justify-between">
+              <div>
+                <p className="text-xl font-bold">
+                  {booking.flight.source_city || booking.source_city} ({withDeletedAirportLabel(booking.flight.source_airport_name || booking.source_airport_name, booking.flight.source_airport_status || booking.source_airport_status)}) - {booking.flight.source_terminal || booking.source_terminal || '-'}
+                </p>
+                <p className="text-xs">{formatDateTime(booking.flight.departure_time || booking.departure_time)}</p>
+              </div>
+              <Plane className="w-6 h-6 rotate-90" />
+              <div className="text-right">
+                <p className="text-xl font-bold">
+                  {booking.flight.destination_city || booking.destination_city} ({withDeletedAirportLabel(booking.flight.destination_airport_name || booking.destination_airport_name, booking.flight.destination_airport_status || booking.destination_airport_status)}) - {booking.flight.destination_terminal || booking.destination_terminal || '-'}
+                </p>
+                <p className="text-xs">{formatDateTime(booking.flight.arrival_time || booking.arrival_time)}</p>
+              </div>
             </div>
-            <Plane className="w-6 h-6 rotate-90" />
-            <div className="text-right">
-              <p className="text-xl font-bold">
-                {booking.destination_city} ({booking.destination_airport_name}) - {booking.destination_terminal || '-'}
-              </p>
-              <p className="text-xs">{formatDateTime(booking.arrival_time)}</p>
-            </div>
-          </div>
+          )}
         </div>
 
         <div className="flex justify-between pt-4 border-t border-gray-200">
@@ -280,6 +350,20 @@ export default function MyBookings() {
             <span className="bg-red-100 text-red-700 px-4 py-2 rounded-lg font-medium text-sm">
               Cancelled
             </span>
+          ) : isFlightDeleted(booking) ? (
+            <button
+              disabled
+              className="bg-gray-100 text-gray-400 px-4 py-2 rounded-lg cursor-not-allowed"
+            >
+              Flight Cancelled
+            </button>
+          ) : isDeletedBooking(booking) ? (
+            <button
+              disabled
+              className="bg-gray-100 text-gray-400 px-4 py-2 rounded-lg cursor-not-allowed"
+            >
+              Flight Cancelled
+            </button>
           ) : isPast ? (
             <span className="text-gray-500 px-4 py-2">Done</span>
           ) : (
@@ -349,6 +433,20 @@ export default function MyBookings() {
               <div className="space-y-6">
                 <h2 className="text-xl font-semibold text-gray-900">Past Bookings</h2>
                 {pastBookings.map((booking) => renderBookingCard(booking, true))}
+              </div>
+            )}
+
+            {cancelledBookings.length > 0 && (
+              <div className="space-y-6">
+                <h2 className="text-xl font-semibold text-gray-900">Cancelled Bookings</h2>
+                {cancelledBookings.map((booking) => renderBookingCard(booking, true))}
+              </div>
+            )}
+
+            {deletedBookings.length > 0 && (
+              <div className="space-y-6">
+                <h2 className="text-xl font-semibold text-gray-900">Deleted Flights</h2>
+                {deletedBookings.map((booking) => renderBookingCard(booking, false))}
               </div>
             )}
           </div>

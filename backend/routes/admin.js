@@ -350,15 +350,17 @@ router.put(
   })
 );
 
-router.delete("/delete-airport/:airport_code", asyncHandler(async (req, res) => {
-  const { airport_code } = req.params;
+router.delete("/delete-airport/:code", asyncHandler(async (req, res) => {
+  const { code } = req.params;
 
   await pool.execute(
-    "DELETE FROM airport WHERE airport_code = ?",
-    [airport_code]
+    "UPDATE airport SET status = 'INACTIVE' WHERE airport_code = ?",
+    [code]
   );
 
-  res.json({ message: "Airport deleted successfully" });
+  console.log("Airport soft deleted:", code);
+
+  res.json({ message: "Airport marked inactive successfully" });
 }));
 
 router.delete(
@@ -371,12 +373,17 @@ router.delete(
     }
 
     const [result] = await pool.execute(
-      "DELETE FROM flight WHERE flight_id = ?",
+      "UPDATE flight SET status = 'INACTIVE' WHERE flight_id = ?",
+      [flightId]
+    );
+
+    await pool.execute(
+      "UPDATE booking SET status = 'CANCELLED' WHERE flight_id = ?",
       [flightId]
     );
 
     return res.json({
-      message: "Flight deleted successfully",
+      message: "Flight marked inactive successfully",
       affectedRows: result.affectedRows,
     });
   })
@@ -394,12 +401,20 @@ router.get(
   p.last_name,
   f.source,
   f.destination,
+  f.status AS flight_status,
+  src.status AS source_airport_status,
+  dest.status AS destination_airport_status,
+  al.name AS airline_name,
   f.departure_time,
   f.arrival_time,
   b.amount AS price
 FROM booking b
 JOIN passenger p ON b.passenger_id = p.passenger_id
-JOIN flight f ON b.flight_id = f.flight_id
+LEFT JOIN flight f ON b.flight_id = f.flight_id
+LEFT JOIN airport src ON f.source = src.airport_code
+LEFT JOIN airport dest ON f.destination = dest.airport_code
+LEFT JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
+LEFT JOIN airline al ON ac.airline_id = al.airline_id
 ORDER BY b.booking_id DESC;`
     );
 
@@ -470,14 +485,14 @@ router.get(
     );
 
     const [[totalFlights]] = await pool.execute(
-      "SELECT COUNT(*) AS count FROM Flight"
+      "SELECT COUNT(*) AS total_flights FROM flight WHERE status = 'ACTIVE'"
     );
 
     res.json({
       totalBookings: totalBookings.count,
       totalRevenue: totalRevenue.total || 0,
       totalPassengers: totalPassengers.count,
-      totalFlights: totalFlights.count
+      totalFlights: totalFlights.total_flights
     });
   })
 );
@@ -654,11 +669,64 @@ router.get(
 );
 
 // ================== AIRPORTS ==================
+router.post(
+  "/add-airport",
+  asyncHandler(async (req, res) => {
+    const { airport_code, name, city, terminal } = req.body;
+
+    if (!airport_code || !name || !city) {
+      return res.status(400).json({ error: "airport_code, name, and city are required" });
+    }
+
+    const code = String(airport_code).trim().toUpperCase();
+    const trimmedName = String(name).trim();
+    const trimmedCity = String(city).trim();
+    const trimmedTerminal = terminal ? String(terminal).trim() : null;
+
+    const [existingRows] = await pool.execute(
+      "SELECT airport_code, status FROM airport WHERE airport_code = ? LIMIT 1",
+      [code]
+    );
+
+    if (existingRows.length > 0) {
+      const existing = existingRows[0];
+
+      if (existing.status === "INACTIVE") {
+        await pool.execute(
+          "UPDATE airport SET status = 'ACTIVE', name = ?, city = ?, terminal = ? WHERE airport_code = ?",
+          [trimmedName, trimmedCity, trimmedTerminal, code]
+        );
+
+        return res.json({ message: "Airport restored successfully" });
+      }
+
+      return res.status(409).json({ error: "Airport code already exists" });
+    }
+
+    await pool.execute(
+      "INSERT INTO airport (airport_code, name, city, terminal) VALUES (?, ?, ?, ?)",
+      [code, trimmedName, trimmedCity, trimmedTerminal]
+    );
+
+    res.json({ message: "Airport added" });
+  })
+);
+
 router.get(
   "/airports",
   asyncHandler(async (_req, res) => {
     const [rows] = await pool.execute(
-      "SELECT airport_code, name, city, terminal FROM Airport"
+      "SELECT * FROM airport WHERE status = 'ACTIVE'"
+    );
+    res.json(rows);
+  })
+);
+
+router.get(
+  "/active-airports",
+  asyncHandler(async (_req, res) => {
+    const [rows] = await pool.execute(
+      "SELECT airport_code, name, city, terminal FROM Airport WHERE status = 'ACTIVE'"
     );
     res.json(rows);
   })

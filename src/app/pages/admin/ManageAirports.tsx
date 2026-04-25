@@ -7,6 +7,7 @@ type Airport = {
   name: string;
   city: string;
   terminal: string;
+  status?: string;
 };
 
 export default function ManageAirports() {
@@ -197,7 +198,9 @@ export default function ManageAirports() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-medium text-gray-900">{airport.name}</p>
+                      <p className="font-medium text-gray-900">
+                        {airport.name} {airport.status === 'INACTIVE' ? '(Inactive)' : ''}
+                      </p>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <p className="text-sm text-gray-900">{airport.city}</p>

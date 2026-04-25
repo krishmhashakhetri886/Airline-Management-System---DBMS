@@ -322,25 +322,29 @@ router.get(
       `
       SELECT 
         b.booking_id,
+        b.flight_id,
         b.amount,
         b.status,
         f.source,
         f.destination,
+        f.status AS flight_status,
         f.source_terminal,
         f.destination_terminal,
         f.departure_time,
         f.arrival_time,
-        sa.name AS source_airport_name,
-        sa.city AS source_city,
-        da.name AS destination_airport_name,
-        da.city AS destination_city,
+        src.name AS source_airport_name,
+        src.status AS source_airport_status,
+        src.city AS source_city,
+        dest.name AS destination_airport_name,
+        dest.status AS destination_airport_status,
+        dest.city AS destination_city,
         al.name AS airline_name
       FROM booking b
-      JOIN flight f ON b.flight_id = f.flight_id
-      JOIN airport sa ON f.source = sa.airport_code
-      JOIN airport da ON f.destination = da.airport_code
-      JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
-      JOIN airline al ON ac.airline_id = al.airline_id
+      LEFT JOIN flight f ON b.flight_id = f.flight_id
+      LEFT JOIN airport src ON f.source = src.airport_code
+      LEFT JOIN airport dest ON f.destination = dest.airport_code
+      LEFT JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
+      LEFT JOIN airline al ON ac.airline_id = al.airline_id
       WHERE b.passenger_id = ?
       `,
       [passengerId]
@@ -389,7 +393,7 @@ router.get(
 
     // total spent (only CONFIRMED)
     const [[totalSpent]] = await pool.execute(
-      "SELECT SUM(amount) AS total FROM Booking WHERE passenger_id = ? AND status = 'CONFIRMED'",
+      "SELECT SUM(amount) AS total_spent FROM booking WHERE passenger_id = ? AND status = 'CONFIRMED' AND flight_id IS NOT NULL",
       [passengerId]
     );
 
@@ -402,9 +406,14 @@ router.get(
         f.departure_time,
         f.flight_date
       FROM Booking b
-      JOIN Flight f ON b.flight_id = f.flight_id
+      LEFT JOIN Flight f ON b.flight_id = f.flight_id
+      LEFT JOIN airport src ON f.source = src.airport_code
+      LEFT JOIN airport dest ON f.destination = dest.airport_code
       WHERE b.passenger_id = ? 
         AND b.status = 'CONFIRMED'
+        AND f.status = 'ACTIVE'
+        AND src.status = 'ACTIVE'
+        AND dest.status = 'ACTIVE'
         AND f.flight_date >= CURDATE()
       ORDER BY f.flight_date ASC
       `,
@@ -413,7 +422,7 @@ router.get(
 
     res.json({
       totalBookings: totalBookings.count,
-      totalSpent: totalSpent.total || 0,
+      totalSpent: totalSpent.total_spent || 0,
       upcomingFlights
     });
   })

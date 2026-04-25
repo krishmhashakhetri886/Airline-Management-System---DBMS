@@ -12,6 +12,10 @@ type BookingRow = {
   arrival_time: string;
   price: number;
   status: string | null;
+  flight_status?: string | null;
+  source_airport_status?: string | null;
+  destination_airport_status?: string | null;
+  airline_name?: string | null;
 };
 
 type BookingStatRow = {
@@ -72,8 +76,18 @@ export default function AllBookings() {
     () =>
       bookings.map((booking) => ({
         ...booking,
+        isFlightCancelled:
+          booking.flight_status?.toUpperCase() === 'INACTIVE' ||
+          booking.source_airport_status?.toUpperCase() === 'INACTIVE' ||
+          booking.destination_airport_status?.toUpperCase() === 'INACTIVE' ||
+          !booking.airline_name,
         uiStatus:
-          booking.status?.toUpperCase() === 'CONFIRMED'
+          booking.flight_status?.toUpperCase() === 'INACTIVE' ||
+          booking.source_airport_status?.toUpperCase() === 'INACTIVE' ||
+          booking.destination_airport_status?.toUpperCase() === 'INACTIVE' ||
+          !booking.airline_name
+            ? 'cancelled'
+            : booking.status?.toUpperCase() === 'CONFIRMED'
             ? 'confirmed'
             : 'cancelled',
         passengerName: `${booking.first_name || ''} ${booking.last_name || ''}`.trim(),
@@ -265,7 +279,7 @@ export default function AllBookings() {
                             ) : (
                               <XCircle className="w-4 h-4" />
                             )}
-                            <span className="capitalize">{booking.uiStatus === 'confirmed' ? 'Confirmed' : 'Cancelled'}</span>
+                            <span className="capitalize">{booking.uiStatus === 'confirmed' ? 'Confirmed' : (booking.isFlightCancelled ? 'Flight Cancelled' : 'Cancelled')}</span>
                           </div>
                         </td>
                       </tr>

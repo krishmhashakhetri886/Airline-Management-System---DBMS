@@ -45,6 +45,11 @@ export default function Flights() {
     navigate(`/book/${flightId}`);
   };
 
+  const withAirportDeletedLabel = (name: string, status?: string) => {
+    if (!name) return name;
+    return status === 'INACTIVE' ? `${name} (Airport Deleted)` : name;
+  };
+
   return (
     <Layout>
       <div className="max-w-7xl mx-auto">
@@ -105,9 +110,9 @@ export default function Flights() {
                 )}
 
                 {/* 🆕 AIRPORT NAMES */}
-                {flight.source_airport && flight.destination_airport && (
+                {(flight.source_airport || flight.destination_airport) && (
                   <p className="text-sm text-gray-500">
-                    {flight.source_airport} → {flight.destination_airport}
+                    {withAirportDeletedLabel(flight.source_airport, flight.source_airport_status)} → {withAirportDeletedLabel(flight.destination_airport, flight.destination_airport_status)}
                   </p>
                 )}
 

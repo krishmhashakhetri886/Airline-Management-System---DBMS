@@ -67,15 +67,16 @@ export default function ManageFlights() {
 
   // 🔥 FETCH
   const fetchFlights = () => {
-    fetch("http://localhost:5000/admin-flights")
+    fetch("http://localhost:5000/flights")
       .then(res => res.json())
       .then(data => {
         console.log("Flights API response:", data);
-        setFlights(Array.isArray(data) ? data : (data?.flights || []));
+        setFlights(data);
         setLoading(false);
       })
       .catch(err => {
         console.error(err);
+        setFlights([]);
         setLoading(false);
       });
   };
@@ -84,7 +85,7 @@ export default function ManageFlights() {
   const fetchDropdownData = () => {
     Promise.all([
       fetch("http://localhost:5000/airlines").then(res => res.json()),
-      fetch("http://localhost:5000/airports").then(res => res.json())
+      fetch("http://localhost:5000/active-airports").then(res => res.json())
     ])
       .then(([airlinesData, airportsData]) => {
         setAirlines(airlinesData);
@@ -142,10 +143,6 @@ export default function ManageFlights() {
 
   if (loading) {
     return <p>Loading flights...</p>;
-  }
-
-  if (!flights || flights.length === 0) {
-    return <p>No flights found</p>;
   }
 
   const formatDateTimeForBackend = (value: string) => {
@@ -754,8 +751,8 @@ export default function ManageFlights() {
                   <tr key={flight.flight_id} className="border-t">
                     <td className="p-3">{flight.flight_id}</td>
                     <td className="p-3">
-                      <div>{flight?.source_city || "Unknown"} ({flight?.source_airport_name || "-"}) - {flight?.source_terminal || "-"}</div>
-                      <div>→ {flight?.destination_city || "Unknown"} ({flight?.destination_airport_name || "-"}) - {flight?.destination_terminal || "-"}</div>
+                      <div>{flight?.source_city || flight?.source || "-"} ({flight?.source_airport || flight?.source || "-"}) - {flight?.source_terminal || "-"}</div>
+                      <div>→ {flight?.destination_city || flight?.destination || "-"} ({flight?.destination_airport || flight?.destination || "-"}) - {flight?.destination_terminal || "-"}</div>
                     </td>
                     <td className="p-3">
                       <div>{flight?.airline_name || "-"}</div>
