@@ -22,6 +22,7 @@ export default function BookFlight() {
   const [passengerEmail, setPassengerEmail] = useState(user?.email || '');
   const [paymentMethod, setPaymentMethod] = useState('credit_card');
   const [cardNumber, setCardNumber] = useState('');
+  const [upiId, setUpiId] = useState('');
   const [bookingId, setBookingId] = useState('');
   const [paymentError, setPaymentError] = useState('');
 
@@ -82,7 +83,12 @@ export default function BookFlight() {
       ? Number(flight.business_price || 0)
       : Number(flight.economy_price || 0);
 
-  const totalAmount = selectedSeats.length * price;
+  const totalAmount = selectedSeats.reduce((sum, seat) => {
+    const seatPrice = seat.startsWith('B')
+      ? Number(flight.business_price || 0)
+      : Number(flight.economy_price || 0);
+    return sum + seatPrice;
+  }, 0);
 
   const handleSeatClick = (seatId: string, isBooked: boolean) => {
     if (isBooked) return;
@@ -100,15 +106,21 @@ export default function BookFlight() {
 
   // ✅ REAL PAYMENT
   const handlePayment = async () => {
-  setPaymentError('');
+    setPaymentError('');
 
-  // 🔴 Card validation
-  if (!cardNumber || cardNumber.length < 16) {
-    setPaymentError('Please enter a valid card number');
-    return;
-  }
+    if (paymentMethod === 'upi') {
+      if (!upiId.trim()) {
+        setPaymentError('Please enter your UPI ID');
+        return;
+      }
+    } else {
+      if (!cardNumber || cardNumber.length !== 16) {
+        setPaymentError('Please enter a valid 16-digit card number');
+        return;
+      }
+    }
 
-  // 🔴 Safety checks (IMPORTANT)
+    // 🔴 Safety checks (IMPORTANT)
   if (!flight || !flight.flight_id) {
     setPaymentError("Invalid flight data");
     return;
@@ -196,6 +208,7 @@ export default function BookFlight() {
     // ✅ SUCCESS
     setBookingId(String(bookingData.booking_id));
     setStep('success');
+    return;
 
   } catch (err: any) {
     console.error("FINAL ERROR:", err);
@@ -251,16 +264,24 @@ export default function BookFlight() {
       </div>
 
       <div className="bg-white rounded-2xl p-6 border">
-        <select
-          value={numTickets}
-          onChange={(e) => {
-            setNumTickets(Number(e.target.value));
-            setSelectedSeats([]);
-          }}
-          className="w-full p-3 border rounded"
-        >
-          {[1,2,3,4,5].map(n => <option key={n}>{n}</option>)}
-        </select>
+        <input
+  type="number"
+  min="1"
+  value={numTickets}
+  onChange={(e) => {
+    const value = Number(e.target.value);
+
+    if (value > flight.available_seats) {
+      alert("Cannot book more than available seats");
+      return;
+    }
+
+    setNumTickets(value);
+    setSelectedSeats([]);
+  }}
+  className="w-full p-3 border rounded"
+  placeholder="Enter number of seats"
+/>
 
         <input
           value={passengerName}
@@ -363,10 +384,23 @@ export default function BookFlight() {
           </div>
 
           <div>
-            <div className="flex justify-between mb-2">
-              <span className="text-gray-600">Price per ticket</span>
-              <span className="font-medium text-gray-900">₹{price}</span>
-            </div>
+            <div className="mb-2">
+  <span className="text-gray-600 block mb-1">Price per ticket</span>
+
+  <div className="text-sm text-gray-900 space-y-1">
+  <div>
+    Economy: ₹{Number(flight.economy_price || 0)} × {
+      selectedSeats.filter(seat => seat.startsWith('E')).length
+    }
+  </div>
+
+  <div>
+    Business: ₹{Number(flight.business_price || 0)} × {
+      selectedSeats.filter(seat => seat.startsWith('B')).length
+    }
+  </div>
+</div>
+</div>
             <div className="flex justify-between mb-2">
               <span className="text-gray-600">Number of tickets</span>
               <span className="font-medium text-gray-900">{selectedSeats.length}</span>
@@ -420,16 +454,29 @@ export default function BookFlight() {
           </select>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Card Number</label>
-          <input
-            type="text"
-            value={cardNumber}
-            onChange={(e) => setCardNumber(e.target.value.replace(/\D/g, '').slice(0, 16))}
-            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg"
-            placeholder="1234 5678 9012 3456"
-          />
-        </div>
+        {paymentMethod === 'upi' ? (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">UPI ID</label>
+            <input
+              type="text"
+              value={upiId}
+              onChange={(e) => setUpiId(e.target.value)}
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg"
+              placeholder="example@bank"
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Card Number</label>
+            <input
+              type="text"
+              value={cardNumber}
+              onChange={(e) => setCardNumber(e.target.value.replace(/\D/g, '').slice(0, 16))}
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg"
+              placeholder="1234 5678 9012 3456"
+            />
+          </div>
+        )}
 
         {paymentError && (
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
@@ -531,7 +578,7 @@ export default function BookFlight() {
         </button>
 
         <button
-          onClick={() => navigate('/my-bookings')}
+          onClick={() => navigate(`/my-bookings/${user?.id}`)}
           className="flex-1 bg-gradient-to-r from-[#1E3A8A] to-[#06B6D4] text-white px-6 py-3 rounded-lg font-medium"
         >
           View My Bookings

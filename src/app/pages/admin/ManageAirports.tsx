@@ -70,6 +70,10 @@ export default function ManageAirports() {
   };
 
   const handleDelete = async (airportCode: string) => {
+    if (!confirm('Are you sure you want to delete this airport?')) {
+      return;
+    }
+
     try {
       const res = await fetch(`http://localhost:5000/delete-airport/${airportCode}`, {
         method: 'DELETE',

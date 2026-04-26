@@ -4,6 +4,68 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 
 const router = Router();
 
+// ✅ REGISTER
+router.post(
+  "/register",
+  asyncHandler(async (req, res) => {
+    const {
+      first_name,
+      middle_name,
+      last_name,
+      email_id,
+      phone_no,
+      dob,
+      passport_no,
+      password
+    } = req.body;
+
+    // 🔴 BASIC VALIDATION
+    if (!first_name || !last_name || !email_id || !password) {
+      return res.status(400).json({ error: "Required fields missing" });
+    }
+
+    // 🔴 CHECK EMAIL UNIQUE
+    const [existing] = await pool.execute(
+      "SELECT email_id FROM passenger WHERE email_id = ?",
+      [email_id]
+    );
+
+    if (existing.length > 0) {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+
+    // 🔥 AUTO GENERATE passenger_id
+    const [maxId] = await pool.execute(
+      "SELECT MAX(passenger_id) as max FROM passenger"
+    );
+
+    const newId = (maxId[0].max || 300) + 1;
+
+    // 🔥 INSERT
+    await pool.execute(
+      `INSERT INTO passenger 
+      (passenger_id, first_name, middle_name, last_name, email_id, phone_no, dob, passport_no, password)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        first_name,
+        middle_name || "",
+        last_name,
+        email_id,
+        phone_no || "",
+        dob || null,
+        passport_no || "",
+        password
+      ]
+    );
+
+    res.json({
+      message: "Registered successfully",
+      passenger_id: newId
+    });
+  })
+);
+
 router.post(
 	"/signup",
 	asyncHandler(async (req, res) => {

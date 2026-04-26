@@ -352,23 +352,22 @@ router.get(
 
     console.log("Bookings API:", rows);
 
-// 🔽 ADD THIS BLOCK HERE
+// FIX 3: Correct Booking Status
 const updatedRows = rows.map(b => {
-  if (
-    !b.flight_id ||
-    b.flight_status === 'INACTIVE' ||
-    b.source_airport_status === 'INACTIVE' ||
-    b.destination_airport_status === 'INACTIVE'
-  ) {
-    return {
-      ...b,
-      status: 'FLIGHT CANCELLED'
-    };
+  let status = 'CONFIRMED'; // default
+
+  if (b.flight_status === 'INACTIVE') {
+    status = 'FLIGHT CANCELLED';
+  } else if (b.status === 'CANCELLED') {
+    status = 'CANCELLED';
   }
-  return b;
+
+  return {
+    ...b,
+    status
+  };
 });
 
-// 🔽 REPLACE res.json(rows)
 res.json(updatedRows);
   })
 );

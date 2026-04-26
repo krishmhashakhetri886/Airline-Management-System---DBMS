@@ -1,6 +1,6 @@
 import { useAuth } from '../context/AuthContext';
 import Layout from '../components/Layout';
-import { CreditCard, CheckCircle, XCircle, Clock, Download } from 'lucide-react';
+import { CreditCard, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { format } from 'date-fns';
 import { useEffect, useState } from 'react';
 
@@ -174,7 +174,6 @@ export default function MyPayments() {
                     <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
                     <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
                     <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                   </tr>
                 </thead>
 
@@ -192,9 +191,6 @@ export default function MyPayments() {
                         <div className="px-3 py-1 rounded bg-gray-100 text-gray-800">
                           {payment.displayStatus}
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Download className="w-5 h-5" />
                       </td>
                     </tr>
                   ))}

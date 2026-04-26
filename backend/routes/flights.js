@@ -28,8 +28,6 @@ async function fetchAllFlights() {
     LEFT JOIN airport dest
       ON f.destination = dest.airport_code
     WHERE f.status = 'ACTIVE'
-      AND src.status = 'ACTIVE'
-      AND dest.status = 'ACTIVE'
   `);
 
   return { rows, tableName: "Flight" };

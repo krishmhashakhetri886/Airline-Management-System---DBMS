@@ -4,6 +4,7 @@ import { DataProvider } from './context/DataContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
 import Login from './pages/Login';
+import Register from './pages/Register.tsx';
 import PassengerDashboard from './pages/PassengerDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import Flights from './pages/Flights';
@@ -65,8 +66,19 @@ export default function App() {
               }
             />
 
+            <Route path="/register" element={<Register />} />
+
             <Route
               path="/bookings"
+              element={
+                <ProtectedRoute allowedRoles={['passenger']}>
+                  <MyBookings />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/my-bookings/:passenger_id"
               element={
                 <ProtectedRoute allowedRoles={['passenger']}>
                   <MyBookings />

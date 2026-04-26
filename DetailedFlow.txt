@@ -1,0 +1,1077 @@
+DETAILED FLOW: DBMS CONCEPTS, QUERIES, USAGE, PURPOSE, FRONTEND/BACKEND IMPACT, NORMALIZATION
+
+Project: Airline Management System UI_UX
+Database Type: Relational DBMS (MySQL)
+Backend Stack: Node.js + Express + mysql2/promise connection pool
+Frontend Stack: React + TypeScript
+
+====================================================================
+1) DBMS CONCEPTS USED IN THIS PROJECT
+====================================================================
+
+1.1 Relational Data Modeling
+- Data is split into entities/tables such as Passenger, User, Airline, Aircraft, Airport, Flight, Booking, Payment, Booking_Seat.
+- Relationships are formed using keys (primary keys and foreign keys).
+- This allows consistency and reuse of data instead of storing everything in one large table.
+
+1.2 Primary Key and Foreign Key Concepts
+- Primary keys uniquely identify rows (for example passenger_id, flight_id, booking_id).
+- Foreign keys link parent-child data:
+  - Flight references Aircraft.
+  - Aircraft references Airline.
+  - Booking references Passenger and Flight.
+  - Payment references Booking.
+  - Booking_Seat references Booking and Flight.
+- These relationships are used in SQL JOIN queries to compose final API payloads.
+
+1.3 CRUD + Stateful Business Operations
+- Create: register user, create airline/aircraft/airport/flight, create booking, create payment.
+- Read: flight lists, bookings, payments, analytics, dashboard stats.
+- Update: update airport, update flight, cancel booking, set status values.
+- Delete pattern: mostly soft delete via status = INACTIVE or CANCELLED (not physical DELETE).
+
+1.4 Soft Delete Pattern
+- Instead of deleting row physically, status is changed:
+  - airport.status = INACTIVE
+  - flight.status = INACTIVE
+  - booking.status = CANCELLED (in cancellation scenarios)
+- Advantage:
+  - historical data remains available
+  - analytics and audit-style tracking remain possible
+- Result:
+  - frontend can still show historical records but with labels like Flight Cancelled/Refunded.
+
+1.5 Transactions and Atomicity
+- Booking flow uses transaction:
+  beginTransaction -> checks -> inserts -> seat lock update -> commit
+- Payment flow uses transaction:
+  beginTransaction -> lock booking -> insert payment -> update booking status -> commit
+- Signup flow (one route variant) also uses transaction.
+- Purpose:
+  - all related steps succeed together or fail together
+  - avoids half-completed records.
+
+1.6 Concurrency Control
+- SELECT ... FOR UPDATE is used for lock-sensitive flows:
+  - booking locks flight row before seat decrement
+  - payment locks booking row before status update
+- Purpose:
+  - prevent race condition when two users act at same time.
+
+1.7 JOIN-based Query Composition
+- Rich API payloads are built through SQL JOINs across tables.
+- Example: my bookings combines booking + flight + airport + aircraft + airline.
+- Benefit:
+  - one query returns all data needed for a frontend screen.
+
+1.8 Aggregation and Analytics
+- COUNT, SUM, GROUP BY are used in dashboards and admin analytics.
+- Purpose:
+  - produce KPIs (total bookings, total revenue, booking breakdown by airline/status).
+
+1.9 Runtime Schema Introspection
+- SHOW COLUMNS FROM Booking LIKE 'class' is used.
+- Purpose:
+  - supports deployment where Booking.class may or may not exist.
+  - query path changes dynamically.
+
+1.10 Connection Pooling
+- mysql pool is used with connectionLimit and queueing.
+- Purpose:
+  - efficient connection reuse under multiple API calls.
+
+====================================================================
+2) CORE TABLES AND THEIR PURPOSE
+====================================================================
+
+2.1 Passenger
+- Stores passenger identity and login information.
+- Used by registration, login, bookings, dashboards.
+
+2.2 User
+- Used for admin login credentials.
+- Login route first checks admin user table.
+
+2.3 Airline
+- Parent table for airlines.
+- Contains airline name/code and status usage in business logic.
+
+2.4 Aircraft
+- Child table under airline.
+- Stores aircraft model and seat distribution (economy/business/total).
+
+2.5 Airport
+- Stores airport code, name, city, terminal and status.
+- Airport status drives route availability and cancellation cascade behavior.
+
+2.6 Flight
+- Central operational table linking source/destination airports and aircraft.
+- Contains schedule, seat availability, fares and status.
+
+2.7 Booking
+- Stores booking master data per passenger per flight.
+- Booking status changes through payment and cancellation flows.
+
+2.8 Booking_Seat
+- Junction/bridge table for booking-seat mapping (one booking can have many seats).
+- Supports seat occupancy conflict detection.
+
+2.9 Payment
+- Stores payment records linked to booking.
+- Payment status is converted to booking status.
+
+====================================================================
+3) QUERIES USED, WHY USED, HOW USED, PURPOSE, AND EFFECT
+====================================================================
+
+Note:
+- The backend executes SQL using parameterized queries (?, ?, ...), which helps avoid SQL injection in query values.
+- Below is organized by business module.
+
+--------------------------------------------------------------------
+3A) DB CONNECTION / INFRASTRUCTURE
+--------------------------------------------------------------------
+
+Query pattern:
+- connection.ping()
+
+How and why:
+- Runs during backend startup health check.
+- Verifies DB is reachable before serving requests.
+
+Backend effect:
+- If ping fails: server startup stops.
+- If ping succeeds: backend starts and routes are enabled.
+
+Frontend effect:
+- Indirect; frontend can only function when backend started successfully.
+
+--------------------------------------------------------------------
+3B) AUTH AND REGISTRATION QUERIES
+--------------------------------------------------------------------
+
+B1) Email existence check
+- SELECT email_id FROM passenger WHERE email_id = ?
+
+How used:
+- In register flow before insert.
+
+Why/purpose:
+- Prevent duplicate account creation.
+
+Backend effect:
+- Existing email -> response error.
+- New email -> continue to insert path.
+
+Frontend effect:
+- Register page shows error message if email already exists.
+
+B2) Passenger ID generation (manual)
+- SELECT MAX(passenger_id) as max FROM passenger
+or
+- SELECT COALESCE(MAX(passenger_id), 0) + 1 AS next_passenger_id FROM Passenger
+
+How used:
+- Computes next passenger_id before insert.
+
+Why/purpose:
+- Table uses custom/manual id assignment strategy.
+
+Backend effect:
+- Generates new integer id.
+
+Frontend effect:
+- User can log in later using created account.
+
+Risk note:
+- MAX + 1 strategy can cause collisions in high-concurrency systems without stronger locking/auto-increment.
+
+B3) Passenger insert
+- INSERT INTO passenger (passenger_id, first_name, middle_name, last_name, email_id, phone_no, dob, passport_no, password) VALUES (...)
+
+How used:
+- Saves final registration record.
+
+Why/purpose:
+- Persist new user.
+
+Backend effect:
+- Account becomes available for login and booking.
+
+Frontend effect:
+- Register page navigates to login on success.
+
+B4) Admin login check
+- SELECT * FROM User WHERE email = ? AND password = ?
+
+How used:
+- First lookup in login route.
+
+Why/purpose:
+- Distinguish admin login from passenger login.
+
+Backend effect:
+- If found, returns role=admin object.
+
+Frontend effect:
+- Auth state becomes admin and protected admin pages open.
+
+B5) Passenger login check
+- SELECT * FROM Passenger WHERE email_id = ? AND password = ?
+
+How used:
+- Fallback when admin not found.
+
+Why/purpose:
+- Passenger authentication.
+
+Backend effect:
+- Returns role=passenger object.
+
+Frontend effect:
+- Passenger dashboard/features become available.
+
+Security note:
+- Current pattern uses plain password comparison in SQL.
+- Production best practice: salted hash storage + app-level password verification.
+
+--------------------------------------------------------------------
+3C) FLIGHT DISCOVERY AND SEAT AVAILABILITY
+--------------------------------------------------------------------
+
+C1) Flight list for passengers/admin usage
+- SELECT f.*, a.model, a.economy_seats, a.business_seats, al.name AS airline_name, src/dest airport details
+  FROM flight f
+  JOIN aircraft a ...
+  JOIN airline al ...
+  LEFT JOIN airport src ...
+  LEFT JOIN airport dest ...
+  WHERE f.status = 'ACTIVE'
+
+How used:
+- Called by /flights endpoint.
+
+Why/purpose:
+- Return bookable and visible flights with rich display data.
+
+Backend effect:
+- Filters out inactive flights.
+- Includes airline and airport metadata in one response.
+
+Frontend effect:
+- Flights page and booking page show route, airline, departure/arrival, seat/fare info.
+- Inactive airports are visually labeled where status fields indicate INACTIVE.
+
+C2) Booked seats list (seat conflict UI)
+- SELECT seat_no AS seat_number FROM Booking_Seat WHERE flight_id = ?
+- SELECT seat_no FROM Booking_Seat WHERE flight_id = ?
+
+How used:
+- /booked-seats/:flight_id and /seats/:flight_id endpoints.
+
+Why/purpose:
+- Disable already booked seats in seat picker.
+
+Backend effect:
+- Reads occupied seats for a flight.
+
+Frontend effect:
+- BookFlight seat grid marks these seats as disabled.
+
+--------------------------------------------------------------------
+3D) BOOKING FLOW QUERIES
+--------------------------------------------------------------------
+
+D1) Passenger existence verification
+- SELECT passenger_id FROM Passenger WHERE passenger_id = ?
+
+How used:
+- First validation in booking endpoint.
+
+Why/purpose:
+- Ensure booking is for a valid user.
+
+Backend effect:
+- Invalid passenger_id -> booking rejected.
+
+Frontend effect:
+- User sees booking error.
+
+D2) Runtime schema check
+- SHOW COLUMNS FROM Booking LIKE 'class'
+
+How used:
+- Determines whether Booking insert should include class column.
+
+Why/purpose:
+- Backward compatibility across environments.
+
+Backend effect:
+- Chooses insert SQL variant dynamically.
+
+Frontend effect:
+- No visual difference; booking request works across schema versions.
+
+D3) Flight seat lock
+- SELECT available_seats FROM Flight WHERE flight_id = ? FOR UPDATE
+
+How used:
+- Inside booking transaction before seat insert.
+
+Why/purpose:
+- Lock row and prevent concurrent overbooking.
+
+Backend effect:
+- Guarantees available_seats check remains valid within transaction.
+
+Frontend effect:
+- Reduces chance of two users buying same final seats.
+
+D4) Seat collision check
+- SELECT seat_no FROM Booking_Seat WHERE flight_id = ? AND seat_no IN (...)
+
+How used:
+- Checks requested seats against existing reservations.
+
+Why/purpose:
+- Avoid duplicate seat assignment.
+
+Backend effect:
+- If conflict found -> 409 error with conflicting seat list.
+
+Frontend effect:
+- Payment step fails with meaningful message; user can reselect seats.
+
+D5) Booking master insert
+- INSERT INTO Booking (passenger_id, flight_id, amount, status, class?) VALUES (...)
+
+How used:
+- Creates booking record (status initially PENDING).
+
+Why/purpose:
+- Persist booking entity before payment and seat mapping.
+
+Backend effect:
+- booking_id is generated and used as parent key.
+
+Frontend effect:
+- booking_id returned; flow proceeds to payment.
+
+D6) Bulk booking-seat insert
+- INSERT INTO Booking_Seat (booking_id, seat_no, flight_id) VALUES (...), (...)
+
+How used:
+- Adds all selected seats in single query.
+
+Why/purpose:
+- Efficiently persist many seats with fewer DB round trips.
+
+Backend effect:
+- Seats become occupied for this booking.
+
+Frontend effect:
+- Seats later appear disabled for other users.
+
+D7) Seat inventory decrement
+- UPDATE Flight SET available_seats = available_seats - ? WHERE flight_id = ?
+
+How used:
+- Final booking transaction step.
+
+Why/purpose:
+- Keep inventory in sync with selected seat count.
+
+Backend effect:
+- Flight availability drops immediately after booking.
+
+Frontend effect:
+- Flight list eventually reflects reduced available seats after refetch.
+
+D8) Passenger my-bookings detail query
+- SELECT booking + flight + airport + airline details with multiple LEFT JOINs WHERE b.passenger_id = ?
+
+How used:
+- Source for MyBookings page.
+
+Why/purpose:
+- Fetch complete booking cards in one API response.
+
+Backend effect:
+- Returns status signals: booking_status, flight_status, airport status, airline name.
+
+Frontend effect:
+- UI classifies entries into upcoming, past, cancelled, deleted-flight buckets.
+- If flight/airport/airline is inactive/missing, page labels booking as Flight Cancelled.
+
+D9) Cancel booking query
+- UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?
+
+How used:
+- Triggered by Cancel Booking button.
+
+Why/purpose:
+- Preserve history while changing lifecycle state.
+
+Backend effect:
+- Booking status changes without deleting row.
+
+Frontend effect:
+- Booking card status updates to Cancelled.
+
+D10) Passenger dashboard summary queries
+- SELECT COUNT(*) AS count FROM Booking WHERE passenger_id = ?
+- SELECT SUM(b.amount) ... JOIN flight/airports ... WHERE b.status = 'CONFIRMED' AND active filters
+- SELECT upcoming flights with date filter and active filters
+
+How used:
+- /passenger-dashboard/:passenger_id
+
+Why/purpose:
+- Build dashboard KPIs and upcoming trip cards.
+
+Backend effect:
+- Only active flight/airport and confirmed booking contribute to spend/upcoming.
+
+Frontend effect:
+- Passenger dashboard shows total bookings, total spent, and upcoming flights.
+
+--------------------------------------------------------------------
+3E) PAYMENT FLOW QUERIES
+--------------------------------------------------------------------
+
+E1) Booking lock before payment
+- SELECT booking_id FROM Booking WHERE booking_id = ? FOR UPDATE
+
+How used:
+- First query in payment transaction.
+
+Why/purpose:
+- Ensure target booking exists and lock it during update.
+
+Backend effect:
+- Prevent inconsistent status writes from concurrent payment attempts.
+
+Frontend effect:
+- Payment process reliability improves.
+
+E2) Payment insert
+- INSERT INTO Payment (method, status, booking_id) VALUES (?, ?, ?)
+
+How used:
+- Stores payment record.
+
+Why/purpose:
+- Keep financial transaction history.
+
+Backend effect:
+- payment_id generated; payment timeline exists.
+
+Frontend effect:
+- MyPayments screen can display payment rows.
+
+E3) Booking status update from payment outcome
+- UPDATE Booking SET status = ? WHERE booking_id = ?
+
+How used:
+- booking status derived from payment status (CONFIRMED or PAYMENT_FAILED).
+
+Why/purpose:
+- Sync operational booking state with payment result.
+
+Backend effect:
+- Booking becomes confirmed or failed.
+
+Frontend effect:
+- Booking screen status and dashboard totals adapt after refetch.
+
+E4) Payment list query
+- SELECT payment + booking + flight status WHERE b.passenger_id = ? ORDER BY payment_id DESC
+
+How used:
+- Source for MyPayments page.
+
+Why/purpose:
+- Show payment history with amount and booking/flight context.
+
+Backend effect:
+- Returns enough metadata for refunded/completed interpretation.
+
+Frontend effect:
+- MyPayments marks items as Refunded when booking is cancelled or flight is inactive.
+
+--------------------------------------------------------------------
+3F) ADMIN MANAGEMENT QUERIES
+--------------------------------------------------------------------
+
+F1) Add flight conflict check
+- SELECT flight_id FROM Flight WHERE source = ? AND source_terminal = ? AND departure_time = ? AND status = 'ACTIVE'
+
+How used:
+- Before inserting new flight.
+
+Why/purpose:
+- Prevent duplicate active schedule slot.
+
+Backend effect:
+- If exists, request rejected with 409.
+
+Frontend effect:
+- ManageFlights shows duplicate warning.
+
+F2) Flight id generation
+- SELECT MAX(flight_id) AS maxId FROM Flight
+
+How used:
+- Manual new flight id creation before insert.
+
+Why/purpose:
+- Custom id strategy.
+
+Backend effect:
+- Creates explicit flight_id.
+
+Frontend effect:
+- New flight appears in list after refresh.
+
+F3) Add flight
+- INSERT INTO Flight (flight_id, source, destination, departure_time, arrival_time, source_terminal, destination_terminal, flight_date, available_seats, economy_price, business_price, aircraft_id) VALUES (...)
+
+How used:
+- ManageFlights Add action.
+
+Why/purpose:
+- Create operational flight schedule.
+
+Backend effect:
+- New active flight row stored.
+
+Frontend effect:
+- Flight appears in admin and passenger flight lists.
+
+F4) Admin flights list
+- SELECT f.*, airport aliases, aircraft info, airline name FROM flight ... WHERE f.status = 'ACTIVE' ORDER BY f.flight_id DESC
+
+How used:
+- Admin flights table source.
+
+Why/purpose:
+- Present complete flight management data.
+
+Backend effect:
+- Returns active flights with rich metadata.
+
+Frontend effect:
+- ManageFlights table renders flights for edit/delete.
+
+F5) Update airport
+- UPDATE airport SET name = ?, city = ?, terminal = ? WHERE airport_code = ?
+
+How used:
+- ManageAirports edit modal.
+
+Why/purpose:
+- Maintain airport master data.
+
+Backend effect:
+- Airport attributes updated in place.
+
+Frontend effect:
+- Airport list and dependent displays show latest values after refetch.
+
+F6) Update flight
+- UPDATE flight SET source=?, destination=?, departure_time=?, arrival_time=?, economy_price=?, business_price=?, aircraft_id=?, source_terminal=?, destination_terminal=? WHERE flight_id=?
+
+How used:
+- ManageFlights edit operation.
+
+Why/purpose:
+- Correct schedule, route, fares, aircraft assignment.
+
+Backend effect:
+- Flight row updated.
+
+Frontend effect:
+- Updated flight details visible after refresh.
+
+F7) Soft delete airport + cascading state updates
+- UPDATE airport SET status='INACTIVE' WHERE airport_code=?
+- UPDATE flight SET status='INACTIVE' WHERE source=? OR destination=?
+- UPDATE booking SET status='CANCELLED' WHERE flight_id IN (SELECT flight_id FROM flight WHERE source=? OR destination=?)
+
+How used:
+- ManageAirports delete action.
+
+Why/purpose:
+- Remove airport from active operations without deleting history.
+
+Backend effect:
+- Airport becomes inactive.
+- Related flights become inactive.
+- Related bookings are cancelled.
+
+Frontend effect:
+- Airport disappears from active-airports dropdown.
+- Affected flights disappear from active flight listings.
+- Bookings pages mark these trips cancelled/cancelled-flight behavior.
+- Payments may display as refunded based on status interpretation.
+
+F8) Soft delete flight + booking cancellation
+- UPDATE flight SET status='INACTIVE' WHERE flight_id=?
+- UPDATE booking SET status='CANCELLED' WHERE flight_id=?
+
+How used:
+- ManageFlights delete action.
+
+Why/purpose:
+- Disable flight while preserving booking history.
+
+Backend effect:
+- Flight hidden from active flight APIs.
+- Bookings tied to this flight become cancelled.
+
+Frontend effect:
+- Flight is removed from new booking options.
+- Existing passenger bookings display cancellation state.
+
+F9) All bookings admin query
+- SELECT booking + passenger + flight + airport + airline fields ORDER BY booking_id DESC
+
+How used:
+- AllBookings admin page.
+
+Why/purpose:
+- Operational view for all reservations.
+
+Backend effect:
+- Returns full monitoring dataset including status fields.
+
+Frontend effect:
+- Admin table computes UI status (confirmed/cancelled) with inactive flight/airport logic.
+
+F10) Booking stats by airline
+- SELECT al.name, COUNT(b.booking_id), COUNT(DISTINCT b.passenger_id) ... GROUP BY al.name
+
+How used:
+- AllBookings analytics table.
+
+Why/purpose:
+- Demand insight per airline.
+
+Backend effect:
+- Aggregate statistics returned.
+
+Frontend effect:
+- Admin sees airline booking/passenger numbers.
+
+F11) All payments query
+- SELECT payment + booking + passenger join ORDER BY payment_id DESC
+
+How used:
+- Admin payment visibility (if consumed by UI route).
+
+Why/purpose:
+- Monitor all transactions.
+
+Backend effect:
+- Consolidated payment admin list.
+
+Frontend effect:
+- Enables admin finance/audit screens if connected.
+
+F12) Admin KPI queries
+- SELECT COUNT(*) FROM Booking
+- SELECT SUM(amount) FROM Booking WHERE status='CONFIRMED'
+- SELECT COUNT(*) FROM Passenger
+- SELECT COUNT(*) FROM flight WHERE status='ACTIVE'
+
+How used:
+- Admin dashboard card values.
+
+Why/purpose:
+- Executive metrics snapshot.
+
+Backend effect:
+- Returns count/sum metrics.
+
+Frontend effect:
+- Dashboard summary cards display totals.
+
+F13) Airlines insert + code uniqueness generation
+- SELECT airline_id FROM Airline WHERE LOWER(name)=LOWER(?) LIMIT 1
+- SELECT code FROM Airline WHERE code=? LIMIT 1 (loop until unique)
+- INSERT INTO Airline (name, code) VALUES (?, ?)
+
+How used:
+- ManageAirlines add flow.
+
+Why/purpose:
+- Avoid duplicate names and duplicate short codes.
+
+Backend effect:
+- New airline master row is created with unique code.
+
+Frontend effect:
+- Airline appears in airline list and dropdowns.
+
+F14) Aircraft insert (inline in add-airline transaction or standalone add-aircraft route)
+- INSERT INTO Aircraft (model, airline_id, total_seats, economy_seats, business_seats) VALUES (?, ?, ?, ?, ?)
+
+How used:
+- Adds aircraft under airline.
+
+Why/purpose:
+- Define seat structure used by flight and booking logic.
+
+Backend effect:
+- Aircraft records attached to airline.
+
+Frontend effect:
+- ManageAirlines displays aircraft cards.
+- ManageFlights can select these aircraft.
+
+F15) Airlines listing
+- SELECT * FROM Airline
+
+How used:
+- ManageAirlines list, AdminDashboard count, ManageFlights dropdown.
+
+Why/purpose:
+- Master airline source.
+
+Backend effect:
+- Returns airline rows.
+
+Frontend effect:
+- Airline cards/dropdowns populated.
+
+F16) Add airport with restore behavior
+- SELECT airport_code, status FROM airport WHERE airport_code=? LIMIT 1
+- If found inactive: UPDATE airport SET status='ACTIVE' WHERE airport_code=?
+- Else INSERT INTO airport (airport_code, name, city, terminal) VALUES (?, ?, ?, ?)
+
+How used:
+- ManageAirports add operation.
+
+Why/purpose:
+- Prevent duplicate code and support reactivation.
+
+Backend effect:
+- Existing inactive airport is restored instead of duplicate insert.
+
+Frontend effect:
+- Airport becomes available again in active airport APIs and dropdowns.
+
+F17) Airports active list
+- SELECT * FROM airport WHERE status='ACTIVE'
+- SELECT airport_code, name, city, terminal FROM Airport WHERE status='ACTIVE'
+
+How used:
+- ManageAirports listing and ManageFlights active-airports dropdown.
+
+Why/purpose:
+- Restrict UI operations to currently active airports.
+
+Backend effect:
+- Inactive airports filtered out.
+
+Frontend effect:
+- Users/admin cannot schedule flights using inactive airports.
+
+F18) Aircrafts by airline
+- SELECT * FROM Aircraft WHERE airline_id=?
+
+How used:
+- ManageAirlines detail blocks and ManageFlights aircraft dropdown dependency.
+
+Why/purpose:
+- Return only aircraft for selected airline.
+
+Backend effect:
+- Scoped aircraft list.
+
+Frontend effect:
+- Dynamic airline -> aircraft selection works.
+
+F19) Admin analytics status summary
+- SELECT status, COUNT(*) FROM Booking GROUP BY status
+
+How used:
+- Admin dashboard chart data.
+
+Why/purpose:
+- Booking lifecycle distribution.
+
+Backend effect:
+- Aggregated status counts returned.
+
+Frontend effect:
+- Status chart renders confirmed/cancelled/etc counts.
+
+F20) Admin analytics airline summary
+- SELECT al.name, COUNT(*) as bookings FROM Booking ... JOIN chain ... GROUP BY al.name
+
+How used:
+- Admin dashboard trend/airline chart.
+
+Why/purpose:
+- Compare airline booking demand.
+
+Backend effect:
+- Aggregated booking counts per airline.
+
+Frontend effect:
+- Chart plots booking counts by airline.
+
+====================================================================
+4) WHAT HAPPENS EVERY TIME (END-TO-END FLOW EXAMPLES)
+====================================================================
+
+4.1 Passenger Registration
+Frontend:
+- User submits register form.
+Backend:
+- checks duplicate email -> computes next id -> inserts passenger.
+Outcome:
+- success redirects to login; failure shows validation/server message.
+
+4.2 Login
+Frontend:
+- Login form sends email/password.
+Backend:
+- checks User table for admin, then Passenger table.
+Outcome:
+- user role returned; frontend enables role-based routes.
+
+4.3 Search Flights
+Frontend:
+- Flights page requests active flights.
+Backend:
+- joins flight/aircraft/airline/airport with active flight filter.
+Outcome:
+- user sees only active flights and can proceed to booking.
+
+4.4 Seat Selection
+Frontend:
+- BookFlight requests booked seats for selected flight.
+Backend:
+- reads Booking_Seat seat list.
+Outcome:
+- unavailable seats are disabled in UI.
+
+4.5 Booking + Payment
+Frontend:
+- sends booking payload, then payment payload.
+Backend:
+- transaction locks flight, checks seat conflicts, inserts booking, inserts seats, decrements available seats.
+- payment transaction inserts payment and updates booking status.
+Outcome:
+- success page on completion; failures return errors without partial data corruption.
+
+4.6 Cancel Booking
+Frontend:
+- user clicks cancel.
+Backend:
+- booking status updated to CANCELLED.
+Outcome:
+- booking card switches to Cancelled state.
+
+4.7 Admin Deletes Flight (Soft)
+Frontend:
+- admin clicks delete in ManageFlights.
+Backend:
+- sets flight INACTIVE, cancels related bookings.
+Outcome:
+- flight removed from active flight lists; affected bookings shown cancelled/flight-cancelled.
+
+4.8 Admin Deletes Airport (Soft + Cascade)
+Frontend:
+- admin deletes airport.
+Backend:
+- airport INACTIVE -> related flights INACTIVE -> related bookings CANCELLED.
+Outcome:
+- airport hidden from active dropdowns; flights unavailable; impacted bookings marked cancelled.
+
+====================================================================
+5) WHY THESE QUERY TYPES ARE CHOSEN
+====================================================================
+
+- SELECT: read screens, validations, existence checks.
+- INSERT: create master/transaction records (passenger, booking, payment, flight, etc).
+- UPDATE: status changes, edits, soft delete behavior.
+- JOIN: one API call returns complete denormalized response for UI.
+- GROUP BY + COUNT/SUM: dashboard and analytics.
+- FOR UPDATE + transaction: correctness in high-contention seat/payment operations.
+- Runtime schema check: deployment compatibility when schema differs.
+
+====================================================================
+6) NORMALIZATION ANALYSIS (WHAT IS NORMALIZED AND HOW)
+====================================================================
+
+6.1 1NF (First Normal Form)
+- Most tables hold atomic values per column (no repeated groups in one row).
+- One concern:
+  - airport.terminal appears to store comma-separated terminals (for example T1,T2,T3).
+  - This is not ideal 1NF strictness because multiple values are in one column.
+  - Better design: separate Airport_Terminal table.
+
+6.2 2NF (Second Normal Form)
+- Non-key columns in each table generally depend on full key.
+- Booking_Seat behaves like a junction table for many seats per booking.
+- If primary key is composite or surrogate plus unique combination, seat mapping is normalized enough for operational use.
+
+6.3 3NF (Third Normal Form)
+- Most transitive dependencies are split correctly:
+  - Airline details are not duplicated in Flight; Flight references Aircraft then Airline.
+  - Airport details are not copied into Flight beyond airport_code references.
+- Reporting queries use JOINs instead of storing redundant denormalized strings.
+
+6.4 Practical Denormalization for API Read Models
+- API outputs include aliases (airline_name, source_city, destination_airport_name, etc).
+- This is runtime denormalization by query, not table design denormalization.
+- Good practice for frontend convenience.
+
+6.5 Suggested Normalization Improvements
+- Airport terminals:
+  - Current: terminal string CSV in airport table.
+  - Better:
+    - Airport(airport_code, name, city, status)
+    - Airport_Terminal(airport_code, terminal_code)
+- Benefits:
+  - easier terminal validation
+  - cleaner JOIN filters
+  - better data integrity.
+
+6.6 Suggested Integrity Constraints (if not already in DB)
+- Unique constraints:
+  - Passenger.email_id unique
+  - Airline.name unique (or case-insensitive unique handling)
+  - Airline.code unique
+  - Airport.airport_code unique
+- Foreign keys with ON UPDATE/ON DELETE rules aligned with soft-delete logic.
+- Optional check constraints:
+  - economy_seats + business_seats = total_seats
+  - available_seats >= 0
+  - price and fare columns >= 0
+
+====================================================================
+7) IMPORTANT BEHAVIORAL NOTES FROM CURRENT CODE
+====================================================================
+
+- Soft delete is implemented through status fields, not hard DELETE for major operations.
+- Some endpoints intentionally return active-only rows (for example flights and active-airports).
+- Some master endpoints (like airlines and aircraft-by-airline) currently return broad rows without status filtering in current code.
+- Manual id generation with MAX + 1 is used in some flows; this works functionally but is less safe under high concurrency than auto-increment/sequence.
+- Password handling currently appears plaintext-based in DB comparison and should be upgraded to hashed auth for production.
+
+====================================================================
+8) CONCLUSION
+====================================================================
+
+This project uses core DBMS principles strongly:
+- relational modeling,
+- transactional correctness for booking/payment,
+- soft delete lifecycle management,
+- JOIN-based read models,
+- aggregated analytics,
+- and partial normalization with a few improvement opportunities.
+
+The queries are purpose-driven:
+- operational correctness (seat lock, status updates),
+- UX readiness (joined payloads, active filters),
+- and business visibility (dashboard aggregates).
+
+The frontend behavior is directly tied to backend query outputs:
+- any status or join-field change in SQL immediately changes what users/admins can see and do in the interface.
+
+====================================================================
+9) HOW THE DATABASE IS CONNECTED PROPERLY IN THIS PROJECT
+====================================================================
+
+9.1 Connection Configuration Source
+- The backend reads DB credentials from environment variables in backend/.env.
+- In backend/db.js, dotenv loads .env using an absolute path based on the backend folder.
+- Required variables:
+  - DB_HOST
+  - DB_USER
+  - DB_PASSWORD
+  - DB_NAME
+  - DB_PORT (optional, defaults to 3306)
+
+Why this is important:
+- Credentials are not hardcoded in route files.
+- Different environments (local/staging/production) can use different DB configs safely.
+
+9.2 Connection Pool Creation
+- backend/db.js creates one MySQL pool via mysql2/promise createPool with:
+  - waitForConnections: true
+  - connectionLimit: 10
+  - queueLimit: 0
+
+How this helps proper connection:
+- Reuses open connections instead of opening new connection for every request.
+- Prevents connection exhaustion during multiple simultaneous API calls.
+- Handles queueing when demand is higher than active connection slots.
+
+9.3 Startup Health Check (Verification Before Serving Requests)
+- backend/server.js imports testConnection() from db.js.
+- On server start, it runs testConnection() before app.listen().
+- testConnection() flow:
+  - gets a connection from pool
+  - runs connection.ping()
+  - releases connection in finally block
+
+Purpose:
+- Confirms DB is reachable and credentials are valid before the API is exposed.
+
+Behavior:
+- If ping succeeds: backend starts normally.
+- If ping fails: startup catches error and exits process with failure.
+
+9.4 Runtime Query Usage Pattern
+- All route files import the same pool instance from db.js.
+- Standard queries use:
+  - pool.execute("SQL", [params])
+- Transactional flows use:
+  - const connection = await pool.getConnection()
+  - beginTransaction()
+  - connection.execute(...)
+  - commit() or rollback()
+  - connection.release() in finally
+
+Why this is correct:
+- Single shared pool avoids duplicate unmanaged connections.
+- Transactional flows pin work to one connection, which is required for transaction correctness.
+- finally release avoids connection leak.
+
+9.5 Error Handling That Protects Connection Stability
+- Startup-level DB errors stop server early, preventing partial app behavior.
+- Route-level transaction blocks always rollback on error and release connection.
+- Non-transaction queries rely on pool.execute, which is connection-managed by pool internals.
+
+Impact:
+- Keeps backend stable under failures.
+- Avoids dangling/locked connections.
+
+9.6 How to Confirm Connection Is Properly Working (Practical Checks)
+- Check backend console at startup:
+  - "Database connected successfully"
+  - "Backend running at http://localhost:5000"
+- Hit GET /health endpoint:
+  - should return service health JSON.
+- Trigger one DB-backed API (for example /flights):
+  - should return rows without DB connection errors.
+
+If connection fails, common causes:
+- wrong DB_HOST / DB_USER / DB_PASSWORD / DB_NAME
+- MySQL service not running
+- DB user has insufficient privileges
+- wrong DB_PORT or blocked port
+
+9.7 Current Strength of This Connection Design
+- Environment-based config
+- Pooling enabled
+- Pre-start connectivity test
+- Safe transaction lifecycle (commit/rollback/release)
+
+Overall result:
+- The project connects to DB in a production-style, reliable pattern for small-to-medium traffic applications.

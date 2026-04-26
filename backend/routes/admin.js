@@ -169,6 +169,19 @@ router.post(
       return res.status(400).json({ error: "Missing required flight fields" });
     }
 
+    // FIX 1: Flight Time Validation
+    const depTime = new Date(departure_time);
+    const arrTime = new Date(arrival_time);
+    if (arrTime <= depTime) {
+      return res.status(400).json({ error: "Arrival must be after departure" });
+    }
+
+    // FIX 6: Flight Date Validation
+    const now = new Date();
+    if (depTime < now) {
+      return res.status(400).json({ error: "Departure time cannot be in the past" });
+    }
+
     if (!derivedFlightDate) {
       return res.status(400).json({ error: "Unable to derive flight_date from departure_time" });
     }
@@ -189,49 +202,68 @@ router.post(
       return res.status(400).json({ error: "Invalid aircraft_id" });
     }
 
-    // 🔥 FIX: MANUAL flight_id GENERATION
-    const [maxIdRow] = await pool.execute(
-      "SELECT MAX(flight_id) AS maxId FROM Flight"
+    // FIX 4: Flight Conflict Validation
+    const [existingFlight] = await pool.execute(
+      `SELECT flight_id FROM Flight
+       WHERE source = ?
+         AND source_terminal = ?
+         AND departure_time = ?
+         AND status = 'ACTIVE'`,
+      [source, source_terminal || null, departure_time]
     );
 
-    const newFlightId = (maxIdRow[0].maxId || 200) + 1;
+    if (existingFlight.length > 0) {
+      return res.status(409).json({ error: "Active flight already exists" });
+    }
 
-    // 🔥 INSERT WITH flight_id
-    await pool.execute(
-      `INSERT INTO \`Flight\` (
-        flight_id,
-        source,
-        destination,
-        departure_time,
-        arrival_time,
-        source_terminal,
-        destination_terminal,
-        flight_date,
-        available_seats,
-        economy_price,
-        business_price,
-        aircraft_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        newFlightId,
-        source,
-        destination,
-        departure_time,
-        arrival_time,
-        source_terminal || null,
-        destination_terminal || null,
-        derivedFlightDate,
-        seats,
-        economyPrice,
-        businessPrice,
-        aircraftId,
-      ]
-    );
+    try {
+      // 🔥 FIX: MANUAL flight_id GENERATION
+      const [maxIdRow] = await pool.execute(
+        "SELECT MAX(flight_id) AS maxId FROM Flight"
+      );
 
-    return res.status(201).json({
-      message: "Flight added successfully",
-      flight_id: newFlightId,
-    });
+      const newFlightId = (maxIdRow[0].maxId || 200) + 1;
+
+      // 🔥 INSERT WITH flight_id
+      await pool.execute(
+        `INSERT INTO \`Flight\` (
+          flight_id,
+          source,
+          destination,
+          departure_time,
+          arrival_time,
+          source_terminal,
+          destination_terminal,
+          flight_date,
+          available_seats,
+          economy_price,
+          business_price,
+          aircraft_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newFlightId,
+          source,
+          destination,
+          departure_time,
+          arrival_time,
+          source_terminal || null,
+          destination_terminal || null,
+          derivedFlightDate,
+          seats,
+          economyPrice,
+          businessPrice,
+          aircraftId,
+        ]
+      );
+
+      return res.status(201).json({
+        message: "Flight added successfully",
+        flight_id: newFlightId,
+      });
+    } catch (error) {
+      console.error("Error inserting flight:", error);
+      return res.status(500).json({ error: "Failed to add flight" });
+    }
   })
 );
 
@@ -256,6 +288,7 @@ router.get(
       LEFT JOIN airport da ON f.destination = da.airport_code
       LEFT JOIN aircraft ac ON f.aircraft_id = ac.aircraft_id
       LEFT JOIN airline al ON ac.airline_id = al.airline_id
+      WHERE f.status = 'ACTIVE'
       ORDER BY f.flight_id DESC
     `);
 
@@ -353,39 +386,65 @@ router.put(
 router.delete("/delete-airport/:code", asyncHandler(async (req, res) => {
   const { code } = req.params;
 
-  await pool.execute(
+  // STEP 1: Update airport status
+  const [result] = await pool.execute(
     "UPDATE airport SET status = 'INACTIVE' WHERE airport_code = ?",
     [code]
   );
 
+  // 🚨 IMPORTANT: check if update happened
+  if (result.affectedRows === 0) {
+    return res.status(404).json({ error: "Airport not found" });
+  }
+
+  // STEP 2: Update related flights status
+  await pool.execute(
+    "UPDATE flight SET status = 'INACTIVE' WHERE source = ? OR destination = ?",
+    [code, code]
+  );
+
+  // STEP 3: Cancel related bookings
+  await pool.execute(
+    `UPDATE booking SET status = 'CANCELLED'
+     WHERE flight_id IN (
+       SELECT flight_id FROM flight WHERE source = ? OR destination = ?
+     )`,
+    [code, code]
+  );
+
   console.log("Airport soft deleted:", code);
 
-  res.json({ message: "Airport marked inactive successfully" });
+  res.json({ message: "Airport deleted (soft delete)" });
 }));
 
 router.delete(
   "/delete-flight/:id",
   asyncHandler(async (req, res) => {
     const flightId = Number(req.params.id);
+    console.log("Deleting flight ID:", flightId);
 
-    if (!Number.isInteger(flightId) || flightId <= 0) {
-      return res.status(400).json({ error: "Invalid flight id" });
-    }
+if (!Number.isInteger(flightId) || flightId <= 0) {
+  return res.status(400).json({ error: "Invalid flight_id" });
+}
 
-    const [result] = await pool.execute(
+// STEP 1: Update flight status
+const [result] = await pool.execute(
+  "UPDATE flight SET status = 'INACTIVE' WHERE flight_id = ?",
+  [flightId]
+);
+
+// 🚨 IMPORTANT: check if update happened
+if (result.affectedRows === 0) {
+  return res.status(404).json({ error: "Flight not found" });
+}
+
+// STEP 2: Cancel related bookings
+await pool.execute(
   "UPDATE booking SET status = 'CANCELLED' WHERE flight_id = ?",
   [flightId]
 );
 
-    await pool.execute(
-      "UPDATE booking SET status = 'CANCELLED' WHERE flight_id = ?",
-      [flightId]
-    );
-
-    return res.json({
-      message: "Flight marked inactive successfully",
-      affectedRows: result.affectedRows,
-    });
+res.json({ message: "Flight deleted (soft delete)" });
   })
 );
 
@@ -693,8 +752,8 @@ router.post(
 
       if (existing.status === "INACTIVE") {
         await pool.execute(
-          "UPDATE airport SET status = 'ACTIVE', name = ?, city = ?, terminal = ? WHERE airport_code = ?",
-          [trimmedName, trimmedCity, trimmedTerminal, code]
+          "UPDATE airport SET status = 'ACTIVE' WHERE airport_code = ?",
+          [code]
         );
 
         return res.json({ message: "Airport restored successfully" });
