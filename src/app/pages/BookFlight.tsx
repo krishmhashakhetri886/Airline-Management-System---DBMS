@@ -109,8 +109,16 @@ export default function BookFlight() {
     setPaymentError('');
 
     if (paymentMethod === 'upi') {
-      if (!upiId.trim()) {
+      const trimmedUpiId = upiId.trim();
+      const upiPattern = /^(?:\d{10}|[a-zA-Z][\w.-]{1,255})@[a-zA-Z]{2,64}$/;
+
+      if (!trimmedUpiId) {
         setPaymentError('Please enter your UPI ID');
+        return;
+      }
+
+      if (!upiPattern.test(trimmedUpiId)) {
+        setPaymentError('Please enter a valid UPI ID (for example: name@bank or 9876543210@bank)');
         return;
       }
     } else {
@@ -460,7 +468,22 @@ export default function BookFlight() {
             <input
               type="text"
               value={upiId}
-              onChange={(e) => setUpiId(e.target.value)}
+              onChange={(e) => {
+                const inputValue = e.target.value;
+                const [accountPart, ...bankParts] = inputValue.split('@');
+                const sanitizedAccountPart = accountPart.replace(/[^a-zA-Z0-9._-]/g, '');
+                const normalizedAccountPart = /^\d+$/.test(sanitizedAccountPart)
+                  ? sanitizedAccountPart.slice(0, 10)
+                  : sanitizedAccountPart;
+
+                if (bankParts.length === 0) {
+                  setUpiId(normalizedAccountPart);
+                  return;
+                }
+
+                const bankPart = bankParts.join('@').replace(/[^a-zA-Z]/g, '').slice(0, 64);
+                setUpiId(`${normalizedAccountPart}@${bankPart}`);
+              }}
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg"
               placeholder="example@bank"
             />

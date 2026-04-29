@@ -67,7 +67,7 @@ export default function ManageFlights() {
 
   // 🔥 FETCH
   const fetchFlights = () => {
-    fetch("http://localhost:5000/flights")
+    fetch("http://localhost:5000/admin-flights")
       .then(res => res.json())
       .then(data => {
         console.log("Flights API response:", data);

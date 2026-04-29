@@ -300,14 +300,48 @@ router.get(
 
 router.put("/update-airport/:airport_code", asyncHandler(async (req, res) => {
   const { airport_code } = req.params;
-  const { name, city, terminal } = req.body;
+  const { terminal } = req.body;
 
-  await pool.execute(
-    "UPDATE airport SET name = ?, city = ?, terminal = ? WHERE airport_code = ?",
-    [name, city, terminal, airport_code]
+  if (!terminal || !String(terminal).trim()) {
+    return res.status(400).json({ error: "Terminal is required" });
+  }
+
+  const normalizeTerminalList = (value) =>
+    String(value || "")
+      .split(",")
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean);
+
+  const requestedTerminals = normalizeTerminalList(terminal);
+
+  const [sourceTerminalRows] = await pool.execute(
+    "SELECT DISTINCT source_terminal AS terminal FROM flight WHERE source = ? AND source_terminal IS NOT NULL AND source_terminal <> ''",
+    [airport_code]
   );
 
-  res.json({ message: "Airport updated successfully" });
+  const [destinationTerminalRows] = await pool.execute(
+    "SELECT DISTINCT destination_terminal AS terminal FROM flight WHERE destination = ? AND destination_terminal IS NOT NULL AND destination_terminal <> ''",
+    [airport_code]
+  );
+
+  const usedTerminals = [...sourceTerminalRows, ...destinationTerminalRows]
+    .map((row) => String(row.terminal).trim().toUpperCase())
+    .filter(Boolean);
+
+  const removedTerminals = [...new Set(usedTerminals.filter((usedTerminal) => !requestedTerminals.includes(usedTerminal)))];
+
+  if (removedTerminals.length > 0) {
+    return res.status(400).json({
+      error: `Cannot remove terminals in use: ${removedTerminals.join(", ")}`,
+    });
+  }
+
+  await pool.execute(
+    "UPDATE airport SET terminal = ? WHERE airport_code = ?",
+    [String(terminal).trim(), airport_code]
+  );
+
+  res.json({ message: "Airport updated successfully (terminal only)" });
 }));
 
 router.put(
@@ -762,10 +796,18 @@ router.post(
       return res.status(409).json({ error: "Airport code already exists" });
     }
 
-    await pool.execute(
-      "INSERT INTO airport (airport_code, name, city, terminal) VALUES (?, ?, ?, ?)",
-      [code, trimmedName, trimmedCity, trimmedTerminal]
-    );
+    try {
+      await pool.execute(
+        "INSERT INTO airport (airport_code, name, city, terminal) VALUES (?, ?, ?, ?)",
+        [code, trimmedName, trimmedCity, trimmedTerminal]
+      );
+    } catch (error) {
+      if (error.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({ error: "Airport name already exists" });
+      }
+
+      return res.status(500).json({ error: "Internal server error" });
+    }
 
     res.json({ message: "Airport added" });
   })

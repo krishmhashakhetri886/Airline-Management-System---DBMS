@@ -115,17 +115,21 @@ export default function ManageAirports() {
         ? `http://localhost:5000/update-airport/${editingAirportCode}`
         : 'http://localhost:5000/add-airport';
 
+      const payload = isEditMode
+        ? { terminal: formData.terminal.trim() }
+        : {
+            airport_code: formData.airport_code.trim().toUpperCase(),
+            name: formData.name.trim(),
+            city: formData.city.trim(),
+            terminal: formData.terminal.trim(),
+          };
+
       const res = await fetch(url, {
         method: isEditMode ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          airport_code: formData.airport_code.trim().toUpperCase(),
-          name: formData.name.trim(),
-          city: formData.city.trim(),
-          terminal: formData.terminal.trim(),
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
@@ -239,7 +243,7 @@ export default function ManageAirports() {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-8 max-w-md w-full">
               <h2 className="text-2xl font-bold text-gray-900 mb-6">
-                Add New Airport
+                {isEditMode ? 'Edit Airport Terminal' : 'Add New Airport'}
               </h2>
 
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -249,7 +253,8 @@ export default function ManageAirports() {
                     type="text"
                     value={formData.airport_code}
                     onChange={(e) => setFormData({ ...formData, airport_code: e.target.value.toUpperCase() })}
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]"
+                    disabled={isEditMode}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A] disabled:opacity-70 disabled:cursor-not-allowed"
                     required
                     maxLength={3}
                     placeholder="JFK"
@@ -262,7 +267,8 @@ export default function ManageAirports() {
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]"
+                    disabled={isEditMode}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A] disabled:opacity-70 disabled:cursor-not-allowed"
                     required
                     placeholder="John F. Kennedy International Airport"
                   />
@@ -274,7 +280,8 @@ export default function ManageAirports() {
                     type="text"
                     value={formData.city}
                     onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]"
+                    disabled={isEditMode}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A] disabled:opacity-70 disabled:cursor-not-allowed"
                     required
                     placeholder="New York"
                   />
@@ -289,6 +296,9 @@ export default function ManageAirports() {
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]"
                     placeholder="T1,T2,T3"
                   />
+                  <p className="mt-2 text-xs text-amber-600">
+                    Removing terminal may affect existing flights.
+                  </p>
                 </div>
 
                 <div className="flex gap-4 pt-4">
@@ -303,7 +313,7 @@ export default function ManageAirports() {
                     type="submit"
                     className="flex-1 bg-gradient-to-r from-[#1E3A8A] to-[#06B6D4] text-white px-6 py-3 rounded-lg hover:shadow-lg transition-all duration-200 font-medium"
                   >
-                    Add
+                    {isEditMode ? 'Update' : 'Add'}
                   </button>
                 </div>
               </form>
